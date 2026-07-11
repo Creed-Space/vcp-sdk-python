@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vcp-sdk"
-version = "0.3.0"
+version = "0.4.0"
 description = "Value Context Protocol SDK — portable AI ethics validation"
 readme = "README.md"
 license = "Apache-2.0"
