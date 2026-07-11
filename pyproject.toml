@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vcp-sdk"
+version = "0.3.0"
+description = "Value Context Protocol SDK — portable AI ethics validation"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+    {name = "Creed Space", email = "hello@creed.space"},
+]
+keywords = ["ai", "ethics", "values", "alignment", "safety", "vcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://valuecontextprotocol.org"
+Repository = "https://github.com/Creed-Space/vcp-sdk-python"
+Documentation = "https://valuecontextprotocol.org/docs/sdk"
+
+[project.scripts]
+vcp = "vcp.hub.cli:main"
+
+[project.optional-dependencies]
+jsonschema = ["jsonschema>=4.0"]
+hub = ["cryptography>=42.0", "jsonschema>=4.0", "PyYAML>=6.0"]
+dev = ["pytest>=7.0", "jsonschema>=4.0", "cryptography>=42.0", "PyYAML>=6.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vcp"]

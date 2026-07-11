@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vcp.creed.space/schema/vcp-lite/v1.json",
+  "title": "VCP-Lite Agent Values",
+  "description": "Minimal portable values definition for AI agents. A simplified entry point to the Value Context Protocol (VCP).",
+  "type": "object",
+  "properties": {
+    "vcp_version": {
+      "const": "lite-1.0",
+      "description": "Schema version identifier"
+    },
+    "identity": {
+      "type": "object",
+      "description": "Agent ethical identity as a hierarchical token. Maps to VCP/I token format (domain.approach.role).",
+      "properties": {
+        "domain": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "maxLength": 32,
+          "description": "Top-level domain (e.g. family, company, org, community)"
+        },
+        "approach": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "maxLength": 32,
+          "description": "Ethical approach or methodology (e.g. safe, strict, open)"
+        },
+        "role": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "maxLength": 32,
+          "description": "Functional role (e.g. guide, guardian, advisor, creator)"
+        },
+        "version": {
+          "type": "string",
+          "description": "Optional semantic version or alias",
+          "oneOf": [
+            {"pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+            {"enum": ["latest", "canary"]}
+          ]
+        }
+      },
+      "required": ["domain", "approach", "role"],
+      "additionalProperties": false
+    },
+    "persona": {
+      "type": "string",
+      "enum": ["nanny", "sentinel", "godparent", "ambassador", "muse", "mediator", "custom"],
+      "description": "Archetypal persona governing behavioral stance. Maps to VCP/S CSM1 persona code."
+    },
+    "adherence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5,
+      "description": "Enforcement level (0=advisory, 1=soft, 2=moderate, 3=active, 4=strict, 5=absolute). Maps to VCP/S adherence level."
+    },
+    "scopes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["F", "W", "P", "E", "T", "O", "V", "A", "H", "S", "R"]
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Context scopes where this agent operates. Maps to VCP/S scope codes."
+    },
+    "values": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "principle": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Human-readable ethical principle"
+          },
+          "weight": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Relative importance (0.0=informational, 1.0=critical)"
+          }
+        },
+        "required": ["principle", "weight"],
+        "additionalProperties": false
+      },
+      "maxItems": 20,
+      "description": "Ordered ethical principles with relative weights"
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 500
+      },
+      "maxItems": 20,
+      "description": "Hard boundaries that override all other behavior. These are non-negotiable."
+    },
+    "adaptation_hints": {
+      "type": "object",
+      "description": "Simplified context preferences. For full contextual adaptation, upgrade to VCP/A.",
+      "properties": {
+        "formality": {
+          "type": "string",
+          "enum": ["casual", "neutral", "formal"],
+          "description": "Communication register"
+        },
+        "sensitivity": {
+          "type": "string",
+          "enum": ["low", "moderate", "high"],
+          "description": "Content sensitivity level"
+        },
+        "autonomy": {
+          "type": "string",
+          "enum": ["autonomous", "guided", "supervised"],
+          "description": "Agent decision-making independence"
+        },
+        "transparency": {
+          "type": "string",
+          "enum": ["minimal", "standard", "full"],
+          "description": "How much reasoning the agent exposes"
+        }
+      },
+      "additionalProperties": false
+    },
+    "namespace": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]{0,7}$",
+      "description": "Optional organizational namespace (1-8 uppercase chars). Required when persona is 'custom'."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional provenance and licensing information",
+      "properties": {
+        "author": {
+          "type": "string",
+          "description": "Author or organization"
+        },
+        "license": {
+          "type": "string",
+          "description": "SPDX license identifier (e.g. CC-BY-4.0, Apache-2.0)"
+        },
+        "created": {
+          "type": "string",
+          "format": "date",
+          "description": "Creation date (ISO 8601)"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Human-readable description of this values profile"
+        },
+        "extends": {
+          "type": "string",
+          "description": "VCP token of a parent profile this extends (e.g. family.safe.guide@1.0.0)"
+        },
+        "tags": {
+          "type": "array",
+          "items": {"type": "string"},
+          "maxItems": 10,
+          "description": "Searchable tags"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["vcp_version", "identity", "persona", "adherence", "scopes"],
+  "additionalProperties": false,
+  "if": {
+    "properties": {"persona": {"const": "custom"}}
+  },
+  "then": {
+    "required": ["vcp_version", "identity", "persona", "adherence", "scopes", "namespace"]
+  },
+  "$defs": {
+    "scope_descriptions": {
+      "description": "Reference: VCP/S v2.0 scope code meanings",
+      "type": "object",
+      "properties": {
+        "F": {"const": "Family-appropriate, child-safe"},
+        "W": {"const": "Professional workplace"},
+        "P": {"const": "Privacy-focused, data protection"},
+        "E": {"const": "Educational context"},
+        "T": {"const": "Developer/technical context"},
+        "O": {"const": "Official/governmental"},
+        "V": {"const": "Vulnerable populations"},
+        "A": {"const": "Adult-only, explicit allowed"},
+        "H": {"const": "Healthcare/medical"},
+        "S": {"const": "Social media/community"},
+        "R": {"const": "Religious/spiritual"}
+      }
+    },
+    "adherence_descriptions": {
+      "description": "Reference: VCP/S v2.0 adherence level behaviors",
+      "type": "object",
+      "properties": {
+        "0": {"const": "Advisory: informational only, user always overrides"},
+        "1": {"const": "Soft: gentle warnings, user acknowledges to override"},
+        "2": {"const": "Moderate: clear warnings, user provides reason to override"},
+        "3": {"const": "Active: prominent warnings, limited override scenarios"},
+        "4": {"const": "Strict: explicit warnings, override only in exceptional cases"},
+        "5": {"const": "Absolute: blocking, no user override permitted"}
+      }
+    },
+    "persona_descriptions": {
+      "description": "Reference: VCP/S v2.0 persona archetypes",
+      "type": "object",
+      "properties": {
+        "nanny": {"const": "Child safety and family-appropriate content (code: N)"},
+        "sentinel": {"const": "Security, privacy, and operational safety (code: Z)"},
+        "godparent": {"const": "Ethical guidance and moral reasoning (code: G)"},
+        "ambassador": {"const": "Professional conduct and diplomatic communication (code: A)"},
+        "muse": {"const": "Creativity and artistic expression (code: M)"},
+        "mediator": {"const": "Fair resolution and balanced mediation (code: D)"},
+        "custom": {"const": "User-defined constitution, requires namespace (code: C)"}
+      }
+    },
+    "scope_conflicts": {
+      "description": "Reference: Mutually exclusive scope pairs from VCP/S v2.0",
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {"type": "string"},
+        "minItems": 2,
+        "maxItems": 2
+      },
+      "const": [
+        ["F", "A"],
+        ["V", "A"]
+      ]
+    }
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://creed.space/schemas/registry_entry.schema.json",
+  "title": "Registry Entry Schema",
+  "description": "Schema for compiled constitution registry entries (data/constitutions/registry/*.json). Legacy entries carry only the core fields; entries intended for Creed Commons distribution additionally carry the distribution block. Publishability is gated on the presence of `namespace` — entries without it are valid locally but never published.",
+  "type": "object",
+  "required": ["id", "version", "name"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Unique identifier (snake_case), matches the source constitution id"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semantic version of this entry"
+    },
+    "tier": {
+      "type": "string",
+      "description": "Certification tier (e.g. tier_a_certified, tier_c_adhoc)"
+    },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "author": { "type": "string" },
+    "normative_rules": { "type": "array" },
+    "informative_rules": { "type": "array" },
+    "structured_rules": { "type": "array" },
+    "compiled_at": { "type": "string" },
+    "content_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the source constitution at compile time (legacy field)"
+    },
+    "signature": { "type": "string" },
+    "certified": { "type": "boolean" },
+    "wefa_priors": { "type": ["object", "null"] },
+    "pdp_plugin": { "type": ["string", "null"] },
+    "enforcement_mode": { "type": "string" },
+    "physical_constraints": { "type": "array" },
+    "precedence_levels": { "type": "array" },
+
+    "namespace": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Distribution namespace (e.g. creed-space). Presence marks the entry as publishable; absence means legacy/local-only. The publish lint additionally enforces the launch allowlist."
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the distributed artifact bytes; pinned by vcp install into the lockfile and re-checked by vcp verify"
+    },
+    "trust_tier": {
+      "type": "string",
+      "enum": ["signed", "verified"],
+      "description": "signed = signature + hash + schema verified, semantics NOT vouched for. verified = additionally linted, red-teamed, and counter-signed by Creed Space. MVP ships only signed; never present signed as verified."
+    },
+    "distribution": {
+      "type": "object",
+      "description": "Provenance for distributed artifacts",
+      "required": ["signatures", "source_repo"],
+      "properties": {
+        "signatures": {
+          "type": "object",
+          "description": "Signature scheme -> signer key id. Must be non-empty: unsigned artifacts are never published.",
+          "minProperties": 1,
+          "properties": {
+            "ed25519": { "type": "string" },
+            "gpg": { "type": "string" }
+          },
+          "additionalProperties": { "type": "string" }
+        },
+        "source_repo": {
+          "type": "string",
+          "description": "URL of the repository the artifact was published from"
+        },
+        "artifact": {
+          "type": "string",
+          "description": "Filename of the distributed artifact within the version directory (e.g. anti_gaslighting.md)"
+        },
+        "eval_evidence": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional pointers to evaluation evidence (reports, benchmark runs)"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "dependencies": {
+    "namespace": {
+      "required": ["content_sha256", "distribution", "trust_tier"],
+      "description": "A publishable entry must carry the full distribution block"
+    }
+  }
+}
