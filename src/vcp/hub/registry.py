@@ -17,16 +17,26 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .errors import HubError
+from .errors import HubError, NotFoundError, VerificationError
+from .namespace_registry import (
+    BUILTIN_REGISTRY,
+    NAMESPACE_RE,
+    REGISTRY_FILENAME,
+    NamespaceRegistry,
+    parse_namespace_registry,
+)
+from .verify import INDEX_CONTEXT, verify_detached
 
-# Launch policy: only the Creed Space namespace may be published or installed.
-# Community namespaces (and confusable variants like creed_space / creedspace)
-# stay locked until a moderation + verified-tier process exists.
+# Namespace policy (2026-07-12, community launch): membership is decided by the
+# hub's namespace_registry.json, which must verify against the pinned ROOT keys
+# (see vcp.hub.namespace_registry). A hub without one is founder-only.
+# This constant remains as the bootstrap/founder set.
 ALLOWED_NAMESPACES = frozenset({"creed-space"})
 
 # https:// registries are only accepted on these hosts (Threat T7 — no SSRF
@@ -35,13 +45,16 @@ ALLOWED_HTTPS_HOSTS = frozenset({"raw.githubusercontent.com"})
 
 DEFAULT_REGISTRY_URL = "https://raw.githubusercontent.com/Creed-Space/vcp-hub/main"
 
-NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+# NAMESPACE_RE is canonical in namespace_registry.py (re-exported above).
 ARTIFACT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 VERSION_RE = re.compile(r"^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$")
 
 MAX_FETCH_BYTES = 8 * 1024 * 1024  # generous cap for a text artifact
 
-INDEX_VERSION = 1
+# v2: index.json is ROOT-SIGNED (domain-separated) and carries a monotonic
+# sequence, so registry-controlled metadata (latest, hashes, tiers) can no
+# longer be silently forged or downgraded.
+INDEX_VERSION = 2
 
 
 def validate_ref(ref: str) -> tuple[str, str, str | None]:
@@ -57,14 +70,10 @@ def validate_ref(ref: str) -> tuple[str, str, str | None]:
         raise HubError(f"invalid ref {ref!r} (expected namespace/id[@version])")
     if not NAMESPACE_RE.match(namespace):
         raise HubError(f"invalid namespace {namespace!r}")
-    if namespace not in ALLOWED_NAMESPACES:
-        raise HubError(
-            f"namespace {namespace!r} is not yet open: Creed Commons is launch-locked "
-            f"to {sorted(ALLOWED_NAMESPACES)}. Community publishing opens once a "
-            "moderation and verified-tier process exists."
-        )
     if not ARTIFACT_ID_RE.match(artifact_id):
         raise HubError(f"invalid artifact id {artifact_id!r}")
+    # Syntax only: namespace MEMBERSHIP is enforced against the root-verified
+    # namespace registry at install/lint time (see RegistryClient.namespace_registry).
     return namespace, artifact_id, version
 
 
@@ -74,6 +83,7 @@ class RegistryClient:
     def __init__(self, base: str = DEFAULT_REGISTRY_URL):
         self._base_path: Path | None = None
         self._base_url: str | None = None
+        self._namespace_registry: NamespaceRegistry | None = None
 
         parsed = urllib.parse.urlparse(base)
         if parsed.scheme in ("", "file"):
@@ -106,7 +116,7 @@ class RegistryClient:
             if not target.is_relative_to(self._base_path):
                 raise HubError(f"registry path {rel_path!r} escapes the registry root")
             if not target.is_file():
-                raise HubError(f"registry object not found: {rel_path}")
+                raise NotFoundError(f"registry object not found: {rel_path}")
             data = target.read_bytes()
             if len(data) > MAX_FETCH_BYTES:
                 raise HubError(f"registry object {rel_path} exceeds size cap")
@@ -115,20 +125,61 @@ class RegistryClient:
         try:
             with urllib.request.urlopen(url, timeout=30) as resp:  # nosec B310 — scheme/host allowlisted in __init__
                 data = resp.read(MAX_FETCH_BYTES + 1)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise NotFoundError(f"registry object not found: {rel_path}") from exc
+            raise HubError(f"failed to fetch {url}: {exc}") from exc
         except OSError as exc:
             raise HubError(f"failed to fetch {url}: {exc}") from exc
         if len(data) > MAX_FETCH_BYTES:
             raise HubError(f"registry object {rel_path} exceeds size cap")
         return data
 
+    def namespace_registry(self) -> NamespaceRegistry:
+        """The hub's namespace -> publisher-keys binding, verified against the ROOT.
+
+        Fail-closed semantics:
+        - registry file ABSENT (genuinely 404/missing): founder-only builtin —
+          absence can only reduce what installs, never extend trust;
+        - registry file present but unsigned, tampered, or malformed: refuse
+          everything (a bad trust document is an attack, not a downgrade);
+        - fetch FAILURE that is not a clean 404 (outage, MITM): refuse rather
+          than silently downgrade.
+        """
+        if self._namespace_registry is None:
+            try:
+                registry_bytes = self._fetch(REGISTRY_FILENAME)
+            except NotFoundError:
+                self._namespace_registry = BUILTIN_REGISTRY
+                return self._namespace_registry
+            try:
+                sig_bytes = self._fetch(REGISTRY_FILENAME + ".ed25519.sig")
+            except NotFoundError:
+                sig_bytes = None  # parse_namespace_registry refuses unsigned
+            self._namespace_registry = parse_namespace_registry(registry_bytes, sig_bytes)
+        return self._namespace_registry
+
     def index(self) -> dict[str, Any]:
-        """Load and structurally validate index.json."""
+        """Load, ROOT-VERIFY, and structurally validate index.json.
+
+        The index decides version resolution, expected hashes, and trust tiers,
+        so it must be signed by the pinned root (domain-separated). An unsigned
+        or tampered index refuses everything — there is no fallback.
+        """
+        index_bytes = self._fetch("index.json")
         try:
-            index = json.loads(self._fetch("index.json").decode("utf-8"))
+            sig_bytes: bytes | None = self._fetch("index.json.ed25519.sig")
+        except NotFoundError:
+            sig_bytes = None  # verify_detached refuses unsigned
+        verify_detached(index_bytes, sig_bytes, context=INDEX_CONTEXT, what="registry index")
+        try:
+            index = json.loads(index_bytes.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise HubError(f"registry index.json is not valid JSON: {exc}") from exc
         if not isinstance(index, dict) or index.get("index_version") != INDEX_VERSION:
             raise HubError("registry index.json has an unsupported format")
+        if not isinstance(index.get("sequence"), int) or index["sequence"] < 1:
+            raise VerificationError("registry index has no valid monotonic sequence")
         if not isinstance(index.get("artifacts"), dict):
             raise HubError("registry index.json has no artifacts map")
         return index

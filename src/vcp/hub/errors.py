@@ -14,3 +14,11 @@ class VerificationError(HubError):
     mismatch, content-hash mismatch, schema violation, or crypto being
     unavailable. In every case the artifact is refused — never installed.
     """
+
+
+class NotFoundError(HubError):
+    """A registry object does not exist (distinct from tampering or outage).
+
+    Only object ABSENCE maps here; failed fetches and invalid content stay
+    HubError/VerificationError so callers cannot mistake an attack for a 404.
+    """

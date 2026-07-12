@@ -37,11 +37,21 @@ vcp install creed-space/anti_gaslighting     # verify Ed25519 + sha256 + schema,
 vcp verify                                    # re-check installed tree against vcp.lock
 ```
 
-`vcp install` verifies against a publisher-key allowlist **pinned inside this
-package** (the registry cannot vouch for itself), pins `name@version` +
-content sha256 in `vcp.lock`, and never imports, evals, or executes what it
-fetched. Trust tiers: `signed` proves integrity and origin, not semantics;
-`verified` (lint + red-team + counter-signature) is not yet issued.
+`vcp install` verifies against a trust root **pinned inside this package**
+(the registry cannot vouch for itself), pins `name@version` + content sha256 +
+the verifying key in `vcp.lock`, and never imports, evals, or executes what it
+fetched.
+
+**Community namespaces** are delegated, never a new root: the hub's
+`namespace_registry.json` binds each namespace to its publisher's Ed25519 keys
+and is itself signed by the pinned root; artifacts must verify against a key
+registered to their own namespace. Registration and moderation:
+[GOVERNANCE.md](https://github.com/Creed-Space/vcp-hub/blob/main/GOVERNANCE.md).
+
+Trust tiers: `signed` proves integrity and origin, not semantics; `verified`
+additionally carries a domain-separated **root counter-signature** (issued
+after lint + red-team + human review) that the client checks on install and
+on every `vcp verify`.
 
 ## Development
 

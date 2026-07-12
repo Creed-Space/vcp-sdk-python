@@ -51,7 +51,7 @@ def test_lint_refuses_a_foreign_namespace_directory(make_hub):
 
     report = lint_hub_tree(hub)
 
-    assert any("not permitted" in p for p in report.problems)
+    assert any("is not registered in namespace_registry.json" in p for p in report.problems)
 
 
 def test_lint_refuses_a_schema_invalid_entry(make_hub):

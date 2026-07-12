@@ -14,7 +14,7 @@ import json
 import sys
 
 import pytest
-from conftest import FIXED_SIGNED_AT, TEST_KEY_ID, make_sidecar
+from conftest import FIXED_SIGNED_AT, TEST_KEY_ID, make_sidecar, public_pem
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from vcp.hub.errors import VerificationError
 from vcp.hub.verify import VerifiedArtifact, verify_artifact_bytes
@@ -22,7 +22,7 @@ from vcp.hub.verify import VerifiedArtifact, verify_artifact_bytes
 CONTENT = b"a constitution, as opaque bytes\n"
 
 
-def test_valid_signature_and_hash_round_trips(pinned_test_key, sign_artifact):
+def test_valid_signature_and_hash_round_trips(pinned_test_key, sign_artifact, test_private_key):
     sig = sign_artifact(CONTENT)
 
     verified = verify_artifact_bytes(CONTENT, sig)
@@ -31,6 +31,7 @@ def test_valid_signature_and_hash_round_trips(pinned_test_key, sign_artifact):
         key_id=TEST_KEY_ID,
         content_sha256=hashlib.sha256(CONTENT).hexdigest(),
         signed_at=FIXED_SIGNED_AT,
+        public_key_pem=public_pem(test_private_key),
     )
 
 

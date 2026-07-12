@@ -23,6 +23,7 @@ from typing import Any
 from .entry_schema import validate_entry
 from .errors import HubError, VerificationError
 from .lint import write_index
+from .namespace_registry import load_hub_namespace_registry
 from .registry import ARTIFACT_ID_RE, VERSION_RE, validate_ref
 from .verify import verify_artifact_bytes
 
@@ -52,11 +53,15 @@ def build_entry(
     artifact_path: Path,
     namespace: str = "creed-space",
     base_entry: dict[str, Any] | None = None,
+    publisher_keys: dict[str, str] | None = None,
+    known_namespaces: set[str] | None = None,
 ) -> dict[str, Any]:
     """Build a distribution registry entry for a signed artifact.
 
     ``base_entry`` (an existing compiled registry entry) is extended when given;
     otherwise a minimal entry is derived from the artifact's frontmatter.
+    ``publisher_keys`` scopes signature trust to the namespace's registered keys
+    (``None`` = pinned root, correct for the founder namespace).
     """
     sig_path = artifact_path.with_suffix(artifact_path.suffix + ".ed25519.sig")
     if not sig_path.is_file():
@@ -64,7 +69,7 @@ def build_entry(
             f"{artifact_path.name}: no .ed25519.sig sidecar; unsigned artifacts are never published"
         )
     content = artifact_path.read_bytes()
-    verified = verify_artifact_bytes(content, sig_path.read_bytes())
+    verified = verify_artifact_bytes(content, sig_path.read_bytes(), publisher_keys=publisher_keys)
 
     entry: dict[str, Any] = dict(base_entry) if base_entry else {}
     fm = _frontmatter(artifact_path)
@@ -96,7 +101,7 @@ def build_entry(
         "artifact": artifact_path.name,
     }
 
-    validate_entry(entry, require_distribution=True)
+    validate_entry(entry, require_distribution=True, known_namespaces=known_namespaces)
     validate_ref(f"{namespace}/{entry['id']}@{version}")
     return entry
 
@@ -113,7 +118,17 @@ def publish(
     """
     artifact_path = Path(artifact_path)
     root = Path(hub_root).resolve()
-    entry = build_entry(artifact_path, namespace=namespace, base_entry=base_entry)
+    # The hub's own root-verified namespace registry decides who may publish
+    # where; the publisher's signature must verify against the keys registered
+    # for the TARGET namespace (no cross-namespace signing).
+    ns_registry = load_hub_namespace_registry(root)
+    entry = build_entry(
+        artifact_path,
+        namespace=namespace,
+        base_entry=base_entry,
+        publisher_keys=ns_registry.publisher_keys(namespace),
+        known_namespaces=ns_registry.names,
+    )
 
     version_dir = root / "namespaces" / namespace / entry["id"] / entry["version"]
     content = artifact_path.read_bytes()

@@ -52,22 +52,38 @@ def _cmd_install(args: argparse.Namespace) -> int:
     result = install(args.ref, args.target, client)
     print(f"installed {result.ref}@{result.version}")
     print(f"  sha256:   {result.content_sha256}")
-    print(f"  signed by: {result.key_id} (trust tier from entry; 'signed' does not vouch for semantics)")
+    print(f"  signed by: {result.key_id}")
+    if result.trust_tier == "verified":
+        print("  trust tier: verified (root counter-signature checked)")
+    else:
+        print(f"  trust tier: {result.trust_tier} (integrity + origin only; semantics not vouched for)")
     for f in result.files:
         print(f"  wrote {f}")
     return 0
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:
-    refs = verify_tree(args.target)
+    client = RegistryClient(args.registry) if args.registry else None
+    refs = verify_tree(args.target, registry=client)
     for ref in refs:
         print(f"ok {ref}")
-    print(f"verified {len(refs)} artifact(s) against vcp.lock")
+    against = "vcp.lock + live signed index" if client else "vcp.lock"
+    print(f"verified {len(refs)} artifact(s) against {against}")
+    return 0
+
+
+def _cmd_namespaces(args: argparse.Namespace) -> int:
+    client = RegistryClient(args.registry)
+    ns_registry = client.namespace_registry()
+    for name in sorted(ns_registry.names):
+        keys = ", ".join(sorted(ns_registry.publisher_keys(name)))
+        print(f"{name}  keys: {keys}")
+    print(f"{len(ns_registry.names)} registered namespace(s); registration: GOVERNANCE.md in the vcp-hub repo")
     return 0
 
 
 def _cmd_lint(args: argparse.Namespace) -> int:
-    report = lint_hub_tree(args.hub_root)
+    report = lint_hub_tree(args.hub_root, require_signed_index=not args.pr)
     for label in report.checked:
         print(f"ok {label}")
     for problem in report.problems:
@@ -116,10 +132,24 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("verify", help="re-verify installed artifacts against vcp.lock")
     p.add_argument("--target", default="creed_artifacts")
+    p.add_argument(
+        "--registry",
+        default=None,
+        help="also re-check every pin against this registry's live signed index",
+    )
     p.set_defaults(func=_cmd_verify)
+
+    p = sub.add_parser("namespaces", help="list registered namespaces and their key ids")
+    p.add_argument("--registry", default=DEFAULT_REGISTRY_URL)
+    p.set_defaults(func=_cmd_namespaces)
 
     p = sub.add_parser("lint", help="lint a registry tree (the vcp-hub CI check)")
     p.add_argument("hub_root")
+    p.add_argument(
+        "--pr",
+        action="store_true",
+        help="PR-preparation mode: skip the signed-index requirement (only the maintainer ceremony can sign)",
+    )
     p.set_defaults(func=_cmd_lint)
 
     p = sub.add_parser("build-index", help="regenerate index.json from lint-passing entries")

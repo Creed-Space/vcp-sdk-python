@@ -14,7 +14,14 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import TEST_KEY_ID, build_entry_dict, make_sidecar, write_version_dir
+from conftest import (
+    TEST_KEY_ID,
+    build_entry_dict,
+    make_sidecar,
+    public_pem,
+    sign_index,
+    write_version_dir,
+)
 from vcp.hub import cli
 from vcp.hub import install as install_mod
 from vcp.hub.errors import HubError, VerificationError
@@ -46,7 +53,7 @@ def test_install_writes_artifact_sig_and_entry(hub, tmp_path):
     assert result.version == "1.0.0"
 
 
-def test_install_pins_version_hash_and_key_in_lockfile(hub, tmp_path):
+def test_install_pins_version_hash_and_key_in_lockfile(hub, tmp_path, test_private_key):
     target = tmp_path / "artifacts"
 
     result = _install(REF, hub, target)
@@ -56,6 +63,9 @@ def test_install_pins_version_hash_and_key_in_lockfile(hub, tmp_path):
         "version": "1.0.0",
         "content_sha256": result.content_sha256,
         "key_id": TEST_KEY_ID,
+        # The exact PEM that verified is pinned so `vcp verify` re-checks the same
+        # trust decision even if the namespace registry changes later.
+        "public_key": public_pem(test_private_key),
         "artifact": f"{ARTIFACT_ID}.md",
         "trust_tier": "signed",
     }
@@ -120,15 +130,32 @@ def test_verify_tree_detects_lockfile_hash_drift(hub, tmp_path):
         verify_tree(target)
 
 
-def test_foreign_namespace_is_launch_locked():
-    with pytest.raises(HubError, match="not yet open"):
-        validate_ref("somebody-else/thing")
+@pytest.mark.parametrize("ref", ["somebody-else/thing", "creedspace/x"])
+def test_unregistered_namespace_is_refused_at_install(hub, tmp_path, ref):
+    """Namespace MEMBERSHIP is now enforced at install (not by validate_ref)
+    against the hub's root-verified registry. A syntactically valid but
+    unregistered namespace — even one confusable with the founder's — is refused
+    before any artifact bytes are fetched. We inject an index record so the ref
+    resolves; the refusal is then unambiguously the namespace-membership check,
+    not a missing-index-entry error."""
+    namespace, _, artifact_id = ref.partition("/")
+    index_path = hub / "index.json"
+    index = json.loads(index_path.read_text())
+    index["artifacts"][f"{namespace}/{artifact_id}"] = {
+        "latest": "1.0.0",
+        "versions": {"1.0.0": {"content_sha256": "0" * 64, "trust_tier": "signed"}},
+    }
+    index_path.write_text(json.dumps(index))
+
+    with pytest.raises(VerificationError, match="not registered"):
+        _install(ref, hub, tmp_path / "artifacts")
 
 
-@pytest.mark.parametrize("ref", ["creed_space/x", "creedspace/x"])
-def test_confusable_namespaces_are_refused(ref):
-    with pytest.raises(HubError):
-        validate_ref(ref)
+def test_syntactically_invalid_namespace_is_refused_by_validate_ref():
+    """validate_ref stays SYNTAX-only: an underscore namespace never parses,
+    so the membership check downstream is never even reached."""
+    with pytest.raises(HubError, match="invalid namespace"):
+        validate_ref("creed_space/x")
 
 
 @pytest.mark.parametrize(
@@ -141,13 +168,18 @@ def test_malformed_refs_are_refused(ref):
 
 
 def test_install_refuses_an_entry_whose_hash_disagrees_with_the_artifact(hub, tmp_path):
-    """T2: the registry entry cannot re-point a signed artifact at other bytes."""
+    """T2: the registry entry cannot re-point a signed artifact at other bytes.
+
+    entry.json is UNSIGNED, so it is no longer the authority on the expected hash:
+    the root-signed index is. A rewritten entry is now caught by the entry-vs-index
+    cross-check, one step earlier than the sidecar hash comparison.
+    """
     entry_path = hub / "namespaces" / "creed-space" / ARTIFACT_ID / "1.0.0" / "entry.json"
     entry = json.loads(entry_path.read_text())
     entry["content_sha256"] = "0" * 64
     entry_path.write_text(json.dumps(entry))
 
-    with pytest.raises(VerificationError, match="content hash mismatch"):
+    with pytest.raises(VerificationError, match="disagrees with the signed index"):
         _install(REF, hub, tmp_path / "artifacts")
 
 
@@ -196,6 +228,7 @@ def test_install_path_never_executes_artifact(tmp_path, monkeypatch, test_privat
     from vcp.hub.lint import write_index
 
     assert write_index(hub_root).ok
+    sign_index(hub_root, test_private_key)
 
     cwd = tmp_path / "cwd"
     cwd.mkdir()

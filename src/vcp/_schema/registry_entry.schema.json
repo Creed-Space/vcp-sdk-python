@@ -82,6 +82,11 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Optional pointers to evaluation evidence (reports, benchmark runs)"
+        },
+        "counter_signatures": {
+          "type": "object",
+          "description": "Root counter-signatures granting the verified tier (scheme -> root key id). The client trusts the .ed25519.countersig sidecar (domain-separated, root-verified), not this display field.",
+          "additionalProperties": { "type": "string" }
         }
       },
       "additionalProperties": false

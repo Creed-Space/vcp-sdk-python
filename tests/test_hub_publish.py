@@ -45,8 +45,14 @@ def test_publish_writes_a_lint_clean_tree_with_an_index(signed_artifact, hub_roo
     ref = publish(md_path, hub_root)
 
     assert ref == REF
-    assert lint_hub_tree(hub_root).ok
     assert (hub_root / "index.json").is_file()
+    # PR-time posture: publish REGENERATES index.json but cannot SIGN it — only the
+    # maintainer release ceremony holds the root key. `vcp lint --pr` is the check a
+    # publisher runs, so the signed-index requirement is off here. A strict lint of
+    # the same tree correctly refuses it until the ceremony signs the index.
+    assert lint_hub_tree(hub_root, require_signed_index=False).ok
+    strict = lint_hub_tree(hub_root)
+    assert any("index.json" in p and "unsigned" in p for p in strict.problems)
 
 
 def test_unsigned_artifact_is_never_published(tmp_path, hub_root, pinned_test_key):
