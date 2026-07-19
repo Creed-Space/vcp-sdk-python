@@ -53,6 +53,45 @@ additionally carries a domain-separated **root counter-signature** (issued
 after lint + red-team + human review) that the client checks on install and
 on every `vcp verify`.
 
+## MCP Server
+
+<!-- mcp-name: io.github.Creed-Space/vcp-mcp -->
+
+`vcp-mcp` exposes the SDK to any MCP client (Claude Code, Claude Desktop, or
+anything else that speaks the protocol). It runs over stdio and is **pure local
+computation** — no network calls, no state between calls, no user data read.
+
+```bash
+pip install "vcp-sdk[mcp]"
+vcp-mcp
+```
+
+Claude Desktop / Claude Code config:
+
+```json
+{
+  "mcpServers": {
+    "vcp": {
+      "command": "vcp-mcp"
+    }
+  }
+}
+```
+
+### Tools
+
+| Tool | What it does |
+|---|---|
+| `vcp_status` | SDK/spec versions, capabilities, dimension and persona vocabularies |
+| `vcp_validate_token` | Parse a VCP/I token into domain / approach / role / version / namespace |
+| `vcp_parse_csm1` | Parse a CSM1 code; reports scopes, deprecations, and scope conflicts |
+| `vcp_encode_context` | Encode the 18 VCP/A context dimensions to wire, JSON, and session metadata |
+| `vcp_validate_lite` | Validate a VCP-Lite document; returns the equivalent CSM1 code and token |
+| `vcp_lite_to_csm1` | Convert VCP-Lite persona/adherence/scopes to a CSM1 code |
+| `creed_classify_principle` | Map a constitution principle to a Schwartz value; flag circular-model tensions |
+
+Resource `vcp://lite/examples` serves the bundled VCP-Lite example documents.
+
 ## Development
 
 ```bash
