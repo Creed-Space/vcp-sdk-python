@@ -47,4 +47,4 @@ __all__ = [
     "lite_to_token",
 ]
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

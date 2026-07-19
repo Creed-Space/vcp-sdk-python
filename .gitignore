@@ -1,0 +1,20 @@
+# Build artifacts — released via PyPI, never committed
+dist/
+build/
+*.egg-info/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Test / tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local noise
+logs/

@@ -10,7 +10,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from vcp.lite import lite_to_csm1, lite_to_token, validate_lite
 
-EXAMPLES_DIR = Path(__file__).parent.parent.parent / "vcp-lite" / "examples"
+# Bundled with the package, so the suite is self-contained (was a sibling-repo path).
+EXAMPLES_DIR = Path(__file__).parent.parent / "src" / "vcp" / "_examples"
 
 
 def _load_example(name: str) -> dict:
