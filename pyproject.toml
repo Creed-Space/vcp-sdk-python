@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vcp-sdk"
-version = "0.5.0"
+version = "0.6.0"
 description = "Value Context Protocol SDK — portable AI ethics validation"
 readme = "README.md"
 license = "Apache-2.0"
@@ -39,7 +39,7 @@ vcp-mcp = "vcp.mcp_server:main"
 jsonschema = ["jsonschema>=4.0"]
 hub = ["cryptography>=42.0", "jsonschema>=4.0", "PyYAML>=6.0"]
 mcp = ["mcp>=1.2"]
-dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "jsonschema>=4.0", "cryptography>=42.0", "PyYAML>=6.0", "mcp>=1.2"]
+dev = ["pytest>=7.0", "jsonschema>=4.0", "cryptography>=42.0", "PyYAML>=6.0", "mcp>=1.2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vcp"]
