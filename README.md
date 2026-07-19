@@ -58,8 +58,9 @@ on every `vcp verify`.
 <!-- mcp-name: io.github.Creed-Space/vcp-mcp -->
 
 `vcp-mcp` exposes the SDK to any MCP client (Claude Code, Claude Desktop, or
-anything else that speaks the protocol). It runs over stdio and is **pure local
-computation** — no network calls, no state between calls, no user data read.
+anything else that speaks the protocol). It runs over stdio by default and is
+**pure local computation** — no network calls, no state between calls, no user
+data read.
 
 ```bash
 pip install "vcp-sdk[mcp]"
@@ -91,6 +92,30 @@ Claude Desktop / Claude Code config:
 | `creed_classify_principle` | Map a constitution principle to a Schwartz value; flag circular-model tensions |
 
 Resource `vcp://lite/examples` serves the bundled VCP-Lite example documents.
+
+### HTTP transport
+
+For hosted deployments, `vcp-mcp` also speaks Streamable HTTP:
+
+```bash
+vcp-mcp --transport http --port 8080     # binds 127.0.0.1, endpoint /mcp
+```
+
+`--port` defaults to `$PORT` then `8080`. The endpoint runs **stateless** (a
+fresh transport per request), so a gateway may route any request to any
+replica. Only `POST /mcp` is served — `GET` would otherwise hold an idle event
+stream open per connection, so it is refused with a clean JSON-RPC 405. A
+`GET /health` endpoint returns `{"status": "ok"}`.
+
+The server has no authentication of its own, so binding beyond loopback
+requires an explicit opt-in:
+
+```bash
+VCP_MCP_ALLOW_INSECURE_HTTP=true vcp-mcp --transport http --host 0.0.0.0
+```
+
+Set that only where a gateway or reverse proxy fronts the server and handles
+client auth.
 
 ## Development
 

@@ -14,6 +14,8 @@ reads no user data, and holds no state between calls.
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -464,10 +466,48 @@ def get_lite_examples() -> str:
     return _json(examples)
 
 
-def main() -> None:
-    """Run the VCP MCP server over stdio."""
-    mcp.run(transport="stdio")
+def main(argv: list[str] | None = None) -> int:
+    """Run the VCP MCP server over stdio (default) or Streamable HTTP."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="vcp-mcp",
+        description="MCP server exposing the VCP SDK (tokens, CSM1, VCP-Lite, context, classification).",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "http"),
+        default="stdio",
+        help="stdio (default) for local MCP clients; http for hosted deployments",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="http mode: bind address (default 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("PORT", "8080")),
+        help="http mode: port (default $PORT, else 8080)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+        return 0
+
+    from ._http import check_bind_allowed, run_http
+
+    try:
+        check_bind_allowed(args.host)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    run_http(mcp._mcp_server, host=args.host, port=args.port)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
