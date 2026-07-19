@@ -53,6 +53,45 @@ additionally carries a domain-separated **root counter-signature** (issued
 after lint + red-team + human review) that the client checks on install and
 on every `vcp verify`.
 
+## CLI — protocol operations
+
+Alongside the Creed Commons commands, `vcp` runs the protocol operations
+directly. These call the same functions the MCP tools do, so scripted CLI
+output and MCP tool output carry the same fields.
+
+```bash
+vcp token validate family.safe.guide@1.0.0   # parse a VCP/I token
+vcp token parse N5+F+E                       # parse a CSM1 code
+vcp lite validate agent.json                 # validate a VCP-Lite document
+vcp lite to-csm1 agent.json                  # VCP-Lite document -> CSM1 code
+vcp encode --space office --agency peer      # context -> VCP/A wire format
+vcp classify "Never endanger a child"        # principle -> Schwartz value
+vcp status                                   # versions, capabilities, vocabularies
+```
+
+Output is JSON by default. `--quiet` prints just the value the command is
+about, for shell consumption:
+
+```bash
+$ vcp lite to-csm1 agent.json --quiet
+N5+F+E
+
+$ vcp encode --space office --constraints legal --constraints time --quiet
+📍office|🔒legal+time
+```
+
+The `validate`/`parse` commands **exit 0 when valid and 1 when invalid**, so
+they work as a CI gate:
+
+```bash
+vcp lite validate agent.json --quiet || exit 1
+```
+
+`vcp encode` takes one flag per context dimension (`--space`, `--agency`,
+`--cognitive-state`, …); `--company` and `--constraints` repeat for multiple
+values, and each personal dimension has a matching `--<dim>-intensity` (1-5).
+Run `vcp encode --help` for the full list.
+
 ## MCP Server
 
 <!-- mcp-name: io.github.Creed-Space/vcp-mcp -->

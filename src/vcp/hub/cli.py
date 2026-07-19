@@ -1,11 +1,24 @@
-"""``vcp`` command-line interface for Creed Commons.
+"""``vcp`` command-line interface — Creed Commons plus protocol operations.
+
+Creed Commons:
 
     vcp search <query> [--registry URL|PATH]
     vcp install <namespace/id[@version]> [--target DIR] [--registry URL|PATH]
     vcp verify [--target DIR]
+    vcp namespaces [--registry URL|PATH]
     vcp lint <hub_root>
     vcp build-index <hub_root>
     vcp publish <artifact.md> --hub <hub_root> [--base-entry entry.json]
+
+Protocol operations (see :mod:`vcp.protocol_cli`):
+
+    vcp token validate <token>
+    vcp token parse <csm1-code>
+    vcp lite validate <file.json>
+    vcp lite to-csm1 <file.json>
+    vcp encode [--space office --agency peer ...]
+    vcp classify "<principle text>"
+    vcp status
 
 Artifacts are signed DATA. Nothing this tool installs is ever imported, evaled,
 or executed; there are no post-install hooks.
@@ -18,6 +31,8 @@ import json
 import sys
 from pathlib import Path
 
+from ..protocol_cli import ProtocolError
+from ..protocol_cli import register as register_protocol_commands
 from .errors import HubError
 from .install import install, verify_tree
 from .lint import lint_hub_tree, write_index
@@ -163,10 +178,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--base-entry", default=None, help="existing compiled registry entry to extend")
     p.set_defaults(func=_cmd_publish)
 
+    # Protocol operations (token/lite/encode/classify/status) — same shaping
+    # functions the MCP server uses, so CLI and MCP output cannot drift.
+    register_protocol_commands(sub)
+
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except HubError as exc:
+    except (HubError, ProtocolError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
