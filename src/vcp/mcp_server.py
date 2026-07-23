@@ -2,36 +2,35 @@
 
 Exposes the VCP SDK — token parsing, CSM1 codes, VCP-Lite documents,
 context encoding, and Schwartz value classification — over the Model
-Context Protocol via stdio.
+Context Protocol, via stdio (default) or Streamable HTTP.
+
+Tool payloads are shaped in :mod:`vcp._ops`, shared with the ``vcp`` CLI so
+the two surfaces cannot drift apart.
 
 Every tool is pure local computation. The server makes no network calls,
 reads no user data, and holds no state between calls.
 
     pip install "vcp-sdk[mcp]"
-    vcp-mcp
+    vcp-mcp                      # stdio
+    vcp-mcp --transport http     # Streamable HTTP on 127.0.0.1:8080
 """
 
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from ._schwartz_classifier import HIGHER_ORDER_MAPPING, classify_principle, detect_tensions
-from .context import PERSONAL_DIMENSIONS, SITUATIONAL_DIMENSIONS, Context
-from .csm1 import CSM1Code, Persona
-from .lite import lite_to_csm1 as _lite_to_csm1
-from .lite import lite_to_token as _lite_to_token
-from .lite import validate_lite as _validate_lite
-from .token import Token
+from . import _ops
 
-from . import __version__
-
-VCP_SPEC_VERSION = "2.0.0"
-VCP_CONTEXT_VERSION = "3.2"
-VCP_LITE_VERSION = "lite-1.0"
+# Re-exported for callers that import the spec versions from this module.
+VCP_SPEC_VERSION = _ops.VCP_SPEC_VERSION
+VCP_CONTEXT_VERSION = _ops.VCP_CONTEXT_VERSION
+VCP_LITE_VERSION = _ops.VCP_LITE_VERSION
 
 _EXAMPLES_DIR = Path(__file__).parent / "_examples"
 
@@ -72,26 +71,7 @@ def vcp_validate_token(token: str) -> str:
         vcp_validate_token(token="invalid")
         # => {"valid": false, "error": "Invalid VCP/I token format: invalid"}
     """
-    try:
-        parsed = Token.parse(token)
-    except ValueError as e:
-        return _json({"valid": False, "error": str(e)})
-
-    return _json(
-        {
-            "valid": True,
-            "canonical": parsed.canonical,
-            "full": parsed.full,
-            "domain": parsed.domain,
-            "approach": parsed.approach,
-            "role": parsed.role,
-            "segments": list(parsed.segments),
-            "depth": parsed.depth,
-            "version": parsed.version,
-            "namespace": parsed.namespace,
-            "uri": parsed.to_uri(),
-        }
-    )
+    return _json(_ops.validate_token(token))
 
 
 @mcp.tool()
@@ -120,28 +100,7 @@ def vcp_parse_csm1(code: str) -> str:
         vcp_parse_csm1(code="XYZ")
         # => {"valid": false, "error": "Invalid CSM1 code: XYZ"}
     """
-    try:
-        parsed = CSM1Code.parse(code)
-    except ValueError as e:
-        return _json({"valid": False, "error": str(e)})
-
-    return _json(
-        {
-            "valid": True,
-            "persona": parsed.persona.name,
-            "persona_name": parsed.persona.persona_name,
-            "persona_description": parsed.persona.description,
-            "adherence_level": parsed.adherence_level,
-            "scopes": [s.name for s in parsed.scopes],
-            "scope_descriptions": {s.name: s.description for s in parsed.scopes},
-            "deprecated_scopes": [s.name for s in parsed.scopes if s.is_deprecated],
-            "conflicts": [[a.name, b.name] for a, b in parsed.get_conflicts()],
-            "namespace": parsed.namespace,
-            "version": parsed.version,
-            "encoded": parsed.encode(),
-            "canonical": parsed.to_canonical(),
-        }
-    )
+    return _json(_ops.parse_csm1(code))
 
 
 # === Context ===
@@ -216,44 +175,32 @@ def vcp_encode_context(
                            cognitive_state_intensity=4)
         # => {"wire_format": "📍office||🧠focused4", ...}
     """
-    context = Context(
-        time=time,
-        space=space,
-        company=company,
-        culture=culture,
-        occasion=occasion,
-        environment=environment,
-        agency=agency,
-        constraints=constraints,
-        system_context=system_context,
-        embodiment=embodiment,
-        proximity=proximity,
-        relationship=relationship,
-        formality=formality,
-        cognitive_state=cognitive_state,
-        cognitive_state_intensity=cognitive_state_intensity,
-        emotional_tone=emotional_tone,
-        emotional_tone_intensity=emotional_tone_intensity,
-        energy_level=energy_level,
-        energy_level_intensity=energy_level_intensity,
-        perceived_urgency=perceived_urgency,
-        perceived_urgency_intensity=perceived_urgency_intensity,
-        body_signals=body_signals,
-        body_signals_intensity=body_signals_intensity,
-    )
-
-    payload = context.to_dict()
-    dimensions_set = [dim for dim in (*SITUATIONAL_DIMENSIONS, *PERSONAL_DIMENSIONS) if dim in payload]
-
     return _json(
-        {
-            "wire_format": context.to_wire(),
-            "json_format": payload,
-            "session_metadata": context.to_session_metadata(),
-            "natural_language": context.to_natural_language(),
-            "dimensions_set": dimensions_set,
-            "version": context.version,
-        }
+        _ops.encode_context(
+            time=time,
+            space=space,
+            company=company,
+            culture=culture,
+            occasion=occasion,
+            environment=environment,
+            agency=agency,
+            constraints=constraints,
+            system_context=system_context,
+            embodiment=embodiment,
+            proximity=proximity,
+            relationship=relationship,
+            formality=formality,
+            cognitive_state=cognitive_state,
+            cognitive_state_intensity=cognitive_state_intensity,
+            emotional_tone=emotional_tone,
+            emotional_tone_intensity=emotional_tone_intensity,
+            energy_level=energy_level,
+            energy_level_intensity=energy_level_intensity,
+            perceived_urgency=perceived_urgency,
+            perceived_urgency_intensity=perceived_urgency_intensity,
+            body_signals=body_signals,
+            body_signals_intensity=body_signals_intensity,
+        )
     )
 
 
@@ -284,22 +231,7 @@ def vcp_validate_lite(document: dict[str, Any]) -> str:
          "identity": {"domain": "family", "approach": "safe", "role": "guide"},
          "persona": "nanny", "adherence": 5, "scopes": ["F", "E"]}
     """
-    errors = _validate_lite(document)
-    if errors:
-        return _json({"valid": False, "errors": errors})
-
-    return _json(
-        {
-            "valid": True,
-            "errors": [],
-            "csm1_code": _lite_to_csm1(document),
-            "token": _lite_to_token(document),
-            "persona": document.get("persona"),
-            "adherence": document.get("adherence"),
-            "scopes": document.get("scopes"),
-            "namespace": document.get("namespace"),
-        }
-    )
+    return _json(_ops.validate_lite(document))
 
 
 @mcp.tool()
@@ -328,34 +260,7 @@ def vcp_lite_to_csm1(
                          scopes=["P", "T", "W"], namespace="SEC")
         # => {"csm1_code": "Z4+P+T+W:SEC", ...}
     """
-    try:
-        Persona.from_name(persona)
-    except ValueError as e:
-        return _json({"error": str(e)})
-
-    if isinstance(adherence, bool) or not isinstance(adherence, int) or not (0 <= adherence <= 5):
-        return _json({"error": "adherence must be an integer 0-5"})
-
-    document: dict[str, Any] = {"persona": persona.lower(), "adherence": adherence, "scopes": scopes}
-    if namespace:
-        document["namespace"] = namespace
-
-    code = _lite_to_csm1(document)
-
-    try:
-        parsed = CSM1Code.parse(code)
-    except ValueError as e:
-        return _json({"error": f"Produced an invalid CSM1 code {code!r}: {e}"})
-
-    return _json(
-        {
-            "csm1_code": parsed.encode(),
-            "persona": parsed.persona.name,
-            "adherence_level": parsed.adherence_level,
-            "scopes": [s.name for s in parsed.scopes],
-            "namespace": parsed.namespace,
-        }
-    )
+    return _json(_ops.lite_to_csm1(persona, adherence, scopes, namespace))
 
 
 # === Constitution authoring ===
@@ -388,23 +293,7 @@ def creed_classify_principle(
                                  principle_type="aim_for",
                                  existing_values=["power", "achievement"])
     """
-    classification = classify_principle(principle_text, principle_type)
-    confident = classification.confidence >= 0.7
-
-    result: dict[str, Any] = {
-        "principle": principle_text,
-        "principle_type": principle_type,
-        "schwartz_value": classification.primary_value,
-        "higher_order": HIGHER_ORDER_MAPPING.get(classification.primary_value, "unknown"),
-        "confidence": classification.confidence,
-        "confident": confident,
-        "candidates": classification.top_3,
-    }
-
-    if existing_values:
-        result["tensions"] = detect_tensions(classification.primary_value, existing_values)
-
-    return _json(result)
+    return _json(_ops.classify_principle_op(principle_text, principle_type, existing_values))
 
 
 # === Server status ===
@@ -423,35 +312,7 @@ def vcp_status() -> str:
         #     "context_version": "3.2", "lite_version": "lite-1.0",
         #     "tools": [...], "capabilities": {...}, "network_access": false}
     """
-    return _json(
-        {
-            "sdk_version": __version__,
-            "spec_version": VCP_SPEC_VERSION,
-            "context_version": VCP_CONTEXT_VERSION,
-            "lite_version": VCP_LITE_VERSION,
-            "tools": [
-                "vcp_status",
-                "vcp_validate_token",
-                "vcp_parse_csm1",
-                "vcp_encode_context",
-                "vcp_validate_lite",
-                "vcp_lite_to_csm1",
-                "creed_classify_principle",
-            ],
-            "capabilities": {
-                "token_parsing": True,
-                "csm1_parsing": True,
-                "context_encoding": True,
-                "lite_validation": True,
-                "schwartz_classification": True,
-            },
-            "capability_tokens": ["vcp-a-ext-v1"],
-            "situational_dimensions": list(SITUATIONAL_DIMENSIONS),
-            "personal_dimensions": list(PERSONAL_DIMENSIONS),
-            "personas": [p.name for p in Persona],
-            "network_access": False,
-        }
-    )
+    return _json(_ops.status())
 
 
 # === Resources ===
@@ -464,10 +325,48 @@ def get_lite_examples() -> str:
     return _json(examples)
 
 
-def main() -> None:
-    """Run the VCP MCP server over stdio."""
-    mcp.run(transport="stdio")
+def main(argv: list[str] | None = None) -> int:
+    """Run the VCP MCP server over stdio (default) or Streamable HTTP."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="vcp-mcp",
+        description="MCP server exposing the VCP SDK (tokens, CSM1, VCP-Lite, context, classification).",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "http"),
+        default="stdio",
+        help="stdio (default) for local MCP clients; http for hosted deployments",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="http mode: bind address (default 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("PORT", "8080")),
+        help="http mode: port (default $PORT, else 8080)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+        return 0
+
+    from ._http import check_bind_allowed, run_http
+
+    try:
+        check_bind_allowed(args.host)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    run_http(mcp._mcp_server, host=args.host, port=args.port)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

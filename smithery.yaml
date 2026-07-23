@@ -1,0 +1,21 @@
+# Smithery deployment config for the VCP MCP server.
+# Docs: https://smithery.ai/docs/build/project-config
+#
+# Deployed as a custom container (see Dockerfile). The image serves Streamable
+# HTTP on $PORT, which Smithery injects. Stateless: every request gets a fresh
+# transport, so the gateway can route any request to any replica.
+runtime: container
+
+startCommand:
+  type: http
+  # Every tool is pure local computation — no network calls, no user data, no
+  # credentials to supply. Nothing to configure, so the schema is empty.
+  configSchema:
+    type: object
+    properties: {}
+    additionalProperties: false
+  exampleConfig: {}
+
+build:
+  dockerfile: Dockerfile
+  dockerBuildPath: "."
