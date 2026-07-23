@@ -34,7 +34,13 @@ VCP_LITE_VERSION = _ops.VCP_LITE_VERSION
 
 _EXAMPLES_DIR = Path(__file__).parent / "_examples"
 
+from vcp import __version__
+
 mcp = FastMCP("vcp")
+# FastMCP exposes no public version parameter; without this, the initialize
+# handshake reports the mcp SDK's version as serverInfo.version. The low-level
+# server's `version` feeds create_initialization_options() directly.
+mcp._mcp_server.version = __version__
 
 
 def _json(payload: Any) -> str:
