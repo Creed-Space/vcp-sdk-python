@@ -1,0 +1,24 @@
+# Render Blueprint — VCP MCP server as a public Streamable HTTP endpoint.
+#
+# One-click deploy: Render Dashboard -> New -> Blueprint -> pick
+# Creed-Space/vcp-sdk-python -> Apply. Review the plan/region, then create.
+#
+# The Dockerfile runs vcp-mcp in Streamable HTTP mode binding 0.0.0.0 on
+# Render's injected $PORT. VCP_MCP_ALLOW_INSECURE_HTTP opts out of the
+# non-loopback bind guard — intentional: this endpoint is meant to be publicly
+# reachable. Pure local compute; no credentials, no outbound network.
+#
+# After it deploys, register on Smithery (smithery.ai/new):
+#   https://<service-name>.onrender.com/mcp
+services:
+  - type: web
+    name: vcp-mcp
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # 'starter' is always-on. The free tier spins down on idle, which makes
+    # Smithery's capability scan and first user calls fail on cold starts.
+    plan: starter
+    region: oregon
+    healthCheckPath: /health
+    autoDeploy: true
