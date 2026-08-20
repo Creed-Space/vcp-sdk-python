@@ -54,7 +54,7 @@ class TestUriToCanonical:
         assert uri_to_canonical("creed://creed.space/family.safe.guide") == "family.safe.guide"
 
     def test_vcp_uri(self):
-        assert uri_to_canonical("vcp://registry/family.safe.guide") == "family.safe.guide"
+        assert uri_to_canonical("vcp://family.safe.guide") == "family.safe.guide"
 
     def test_uri_with_version(self):
         result = uri_to_canonical("creed://creed.space/family.safe.guide@1.0.0")
@@ -69,7 +69,7 @@ class TestUriToCanonical:
             uri_to_canonical("http://example.com/token")
 
     def test_missing_path(self):
-        with pytest.raises(ValueError, match="missing path"):
+        with pytest.raises(ValueError, match="missing issuer or path"):
             uri_to_canonical("creed://creed.space/")
 
 
@@ -116,9 +116,9 @@ class TestTokenParse:
         with pytest.raises(ValueError):
             Token.parse("only.two")
 
-    def test_mixed_case_normalized(self):
-        t = Token.parse("Family.Safe.Guide")
-        assert t.canonical == "family.safe.guide"
+    def test_wire_parser_rejects_noncanonical_case(self):
+        with pytest.raises(ValueError, match="Invalid VCP/I token"):
+            Token.parse("Family.Safe.Guide")
 
     def test_from_creed_uri(self):
         t = Token.from_uri("creed://creed.space/family.safe.guide@1.0.0")

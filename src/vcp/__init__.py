@@ -5,7 +5,10 @@ Validate tokens, parse CSM1 codes, and work with VCP-Lite definitions.
     >>> from vcp import Token, CSM1Code, validate_lite
     >>> token = Token.parse("family.safe.guide@1.0.0")
     >>> code = CSM1Code.parse("N5+F+E")
-    >>> errors = validate_lite({"vcp_version": "lite-1.0", ...})
+    >>> identity = {"domain": "family", "approach": "safe", "role": "guide"}
+    >>> document = {"vcp_version": "lite-1.0", "identity": identity, "persona": "nanny", "adherence": 5, "scopes": ["F"]}
+    >>> validate_lite(document)
+    []
 """
 
 from .context import Context

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import socket
 import subprocess
 import sys
@@ -20,7 +21,7 @@ pytest.importorskip("mcp.client.streamable_http", reason="requires vcp-sdk[mcp]"
 httpx = pytest.importorskip("httpx")
 
 from mcp import ClientSession  # noqa: E402
-from mcp.client.streamable_http import streamablehttp_client  # noqa: E402
+from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
 from vcp._http import ALLOW_INSECURE_ENV, check_bind_allowed, is_loopback  # noqa: E402
 
@@ -75,7 +76,7 @@ def run_http_session(base: str, body):
     """Run an async body against a freshly handshaken HTTP server session."""
 
     async def _go():
-        async with streamablehttp_client(f"{base}/mcp") as (read, write, _):
+        async with streamable_http_client(f"{base}/mcp") as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await body(session)
@@ -139,7 +140,7 @@ def test_malformed_body_is_a_clean_error(http_server):
     body = response.text
     assert "jsonrpc" in body or "error" in body
     # CWE-209: no internal detail reaches the client.
-    for leak in ("Traceback", "site-packages", "/src/vcp", "File \""):
+    for leak in ("Traceback", "site-packages", "/src/vcp", 'File "'):
         assert leak not in body, f"response leaked {leak!r}: {body[:400]}"
 
 
@@ -188,3 +189,28 @@ def test_cli_refuses_public_bind():
     )
     assert proc.returncode == 2
     assert b"refusing to bind" in proc.stderr
+
+
+@pytest.mark.parametrize("port", ["0", "65536", "-1", "not-a-port"])
+def test_cli_rejects_invalid_port_without_starting_server(port):
+    proc = subprocess.run(
+        [sys.executable, "-m", "vcp.mcp_server", "--transport", "http", "--port", port],
+        capture_output=True,
+        timeout=30,
+    )
+    assert proc.returncode == 2
+    assert b"port must be an integer from 1 to 65535" in proc.stderr
+
+
+def test_cli_rejects_malformed_port_environment_cleanly():
+    env = os.environ.copy()
+    env["PORT"] = "not-a-port"
+    proc = subprocess.run(
+        [sys.executable, "-m", "vcp.mcp_server", "--transport", "http"],
+        capture_output=True,
+        timeout=30,
+        env=env,
+    )
+    assert proc.returncode == 2
+    assert b"port must be an integer from 1 to 65535" in proc.stderr
+    assert b"Traceback" not in proc.stderr

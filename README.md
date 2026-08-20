@@ -7,12 +7,22 @@ signed value artifacts.
 - Protocol and docs: [valuecontextprotocol.org](https://valuecontextprotocol.org)
 - Creed Commons registry: [Creed-Space/vcp-hub](https://github.com/Creed-Space/vcp-hub)
 
-## Install
+## Source candidate status
+
+This repository is a legacy standalone implementation candidate. It is not the
+project-maintained VCP-SDK and no PyPI release or registry package name is
+claimed. Select and verify an exact commit, then install that checkout:
 
 ```bash
-pip install vcp-sdk            # core SDK (stdlib-only)
-pip install "vcp-sdk[hub]"     # + the vcp CLI for Creed Commons
+git checkout --detach <reviewed-vcp-sdk-python-commit>
+python -m pip install .
+python -m pip install ".[hub]"  # include the Creed Commons CLI dependencies
 ```
+
+This candidate and the project-maintained VCP-SDK both use the `vcp` Python
+import namespace. Install them in separate virtual environments. Installing
+both into one environment is unsupported because one distribution can replace
+the other's modules.
 
 ## SDK — tokens, CSM1, VCP-Lite
 
@@ -21,7 +31,9 @@ from vcp import Token, CSM1Code, validate_lite
 
 token = Token.parse("family.safe.guide@1.0.0")
 code = CSM1Code.parse("N5+F+E")
-errors = validate_lite({"vcp_version": "lite-1.0", ...})
+identity = {"domain": "family", "approach": "safe", "role": "guide"}
+document = {"vcp_version": "lite-1.0", "identity": identity, "persona": "nanny", "adherence": 5, "scopes": ["F"]}
+errors = validate_lite(document)
 ```
 
 ## Creed Commons — signed value artifacts
@@ -77,7 +89,7 @@ $ vcp lite to-csm1 agent.json --quiet
 N5+F+E
 
 $ vcp encode --space office --constraints legal --constraints time --quiet
-📍office|🔒legal+time
+📍🏢|🔒⚖️⏱️
 ```
 
 The `validate`/`parse` commands **exit 0 when valid and 1 when invalid**, so
@@ -102,7 +114,7 @@ anything else that speaks the protocol). It runs over stdio by default and is
 data read.
 
 ```bash
-pip install "vcp-sdk[mcp]"
+python -m pip install ".[mcp]"
 vcp-mcp
 ```
 

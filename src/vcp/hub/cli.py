@@ -27,17 +27,36 @@ or executed; there are no post-install hooks.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
+from .._json import loads_strict
 from ..protocol_cli import ProtocolError
 from ..protocol_cli import register as register_protocol_commands
 from .errors import HubError
 from .install import install, verify_tree
 from .lint import lint_hub_tree, write_index
 from .publish import publish
-from .registry import DEFAULT_REGISTRY_URL, RegistryClient
+from .registry import DEFAULT_REGISTRY_URL, MAX_FETCH_BYTES, RegistryClient
+
+
+def _read_base_entry(path: str) -> dict:
+    source = Path(path)
+    try:
+        if source.stat().st_size > MAX_FETCH_BYTES:
+            raise HubError(f"base entry {path} exceeds size cap")
+        with source.open("rb") as handle:
+            content = handle.read(MAX_FETCH_BYTES + 1)
+        if len(content) > MAX_FETCH_BYTES:
+            raise HubError(f"base entry {path} exceeds size cap")
+        parsed = loads_strict(content.decode("utf-8"))
+    except HubError:
+        raise
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise HubError(f"cannot read base entry {path}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise HubError(f"base entry {path} must contain a JSON object")
+    return parsed
 
 
 def _cmd_search(args: argparse.Namespace) -> int:
@@ -118,10 +137,7 @@ def _cmd_build_index(args: argparse.Namespace) -> int:
 def _cmd_publish(args: argparse.Namespace) -> int:
     base_entry = None
     if args.base_entry:
-        try:
-            base_entry = json.loads(Path(args.base_entry).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise HubError(f"cannot read base entry {args.base_entry}: {exc}") from exc
+        base_entry = _read_base_entry(args.base_entry)
     ref = publish(args.artifact, args.hub, namespace=args.namespace, base_entry=base_entry)
     print(f"published {ref} into {args.hub} (open a PR to the vcp-hub repo to release)")
     return 0

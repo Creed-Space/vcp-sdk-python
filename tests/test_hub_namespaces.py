@@ -41,13 +41,17 @@ from conftest import (
     write_version_dir,
 )
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from vcp.hub import cli
 from vcp.hub.errors import HubError, VerificationError
 from vcp.hub.install import install, verify_tree
 from vcp.hub.lint import lint_hub_tree, write_index
 from vcp.hub.namespace_registry import (
     FOUNDER_NAMESPACE,
+    MAX_KEYS_PER_NAMESPACE,
     check_community_name,
+    load_hub_namespace_registry,
+    normalize_namespace,
     parse_namespace_registry,
 )
 from vcp.hub.registry import RegistryClient
@@ -198,6 +202,50 @@ def test_registry_without_a_monotonic_sequence_is_refused(test_private_key, comm
         parse_namespace_registry(raw, sign_registry_doc(raw, test_private_key))
 
 
+def test_namespace_helpers_bound_hostile_public_inputs():
+    with pytest.raises(VerificationError, match="at most 64"):
+        normalize_namespace("a" * 100_000)
+
+
+def test_registry_rejects_excessive_publisher_key_fanout(
+    test_private_key,
+    community_private_key,
+    pinned_test_key,
+):
+    community_pem = public_pem(community_private_key)
+    doc = make_registry_doc(
+        {
+            FOUNDER_NAMESPACE: {TEST_KEY_ID: public_pem(test_private_key)},
+            COMMUNITY_NS: {f"key-{index}": community_pem for index in range(MAX_KEYS_PER_NAMESPACE + 1)},
+        }
+    )
+
+    with pytest.raises(VerificationError, match="publisher-key cap"):
+        parse_namespace_registry(doc, sign_registry_doc(doc, test_private_key))
+
+
+def test_hub_loader_rejects_symlinked_trust_documents(
+    tmp_path,
+    test_private_key,
+    community_private_key,
+    pinned_test_key,
+):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    doc = founder_community_doc(test_private_key, community_private_key)
+    doc_path = outside / "registry.json"
+    sig_path = outside / "registry.sig"
+    doc_path.write_bytes(doc)
+    sig_path.write_bytes(sign_registry_doc(doc, test_private_key))
+    hub = tmp_path / "hub"
+    hub.mkdir()
+    (hub / "namespace_registry.json").symlink_to(doc_path)
+    (hub / "namespace_registry.json.ed25519.sig").symlink_to(sig_path)
+
+    with pytest.raises(VerificationError, match="symbolic link"):
+        load_hub_namespace_registry(hub)
+
+
 # --- 6. community name policy -------------------------------------------------
 
 
@@ -206,12 +254,15 @@ def test_registry_without_a_monotonic_sequence_is_refused(test_private_key, comm
     [
         ("ab", set(), "3-63"),  # too short
         ("vcp", set(), "reserved"),  # reserved infrastructure term
+        ("vcp-tools", set(), "reserved"),  # founder prefix reservation
         ("creed", set(), "reserved"),  # reserved founder-adjacent term
+        ("creedlike-values", set(), "reserved"),  # founder prefix reservation
         ("creedspace", set(), "reserved"),  # separator-fold of the founder name
         # Underscores are now rejected by the CHARSET gate before the reserved-name
         # check is ever reached — 'creed_space' can never be registered either way.
         ("creed_space", set(), "must match"),
         ("acme-c0rp", {"acme-corp"}, "confusable"),  # homoglyph squat (0 -> o)
+        ("adm1n", set(), "confusable"),  # digit swap cannot dodge reserved admin
     ],
 )
 def test_check_community_name_rejects_policy_violations(name, existing, match):
@@ -390,16 +441,18 @@ def test_revoking_a_namespace_blocks_new_installs_but_not_the_locked_tree(
     hub = tmp_path / "hub"
     build_community_hub(hub, test_private_key, community_private_key)
     target = tmp_path / "artifacts"
-    install(COMMUNITY_REF, target, RegistryClient(str(hub)))  # succeeds, pins the community PEM
+    client = RegistryClient(str(hub))
+    install(COMMUNITY_REF, target, client)  # succeeds, pins the community PEM
 
     # Revoke: re-sign a registry doc that no longer registers acme-values. The
     # sequence advances (1 -> 2), as a real revocation ceremony's would.
     revoked = make_registry_doc({FOUNDER_NAMESPACE: {TEST_KEY_ID: public_pem(test_private_key)}}, sequence=2)
     write_namespace_registry(hub, revoked, sign_registry_doc(revoked, test_private_key))
 
-    # A FRESH install (fresh client re-reads the registry) is now refused.
+    # The same long-lived client must re-read the trust document, rather than
+    # serving a cached authorization after its root-signed revocation.
     with pytest.raises(VerificationError, match="not registered"):
-        install(COMMUNITY_REF, tmp_path / "artifacts2", RegistryClient(str(hub)))
+        install(COMMUNITY_REF, tmp_path / "artifacts2", client)
 
     # Lint flags the now-orphaned namespace directory.
     report = lint_hub_tree(hub)
@@ -409,6 +462,11 @@ def test_revoking_a_namespace_blocks_new_installs_but_not_the_locked_tree(
     # at install time, so a later registry change cannot retroactively invalidate
     # an on-disk artifact (deliberate trust-on-first-use semantics).
     assert verify_tree(target) == [f"{COMMUNITY_REF}@1.0.0"]
+
+    # An explicitly live verification has a stronger contract: it must apply the
+    # current root-signed namespace registry and reject the revoked signer.
+    with pytest.raises(VerificationError, match="not registered"):
+        verify_tree(target, registry=client)
 
 
 # --- 13. RegistryClient.namespace_registry() resolution ----------------------

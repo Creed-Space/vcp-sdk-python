@@ -15,15 +15,22 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
+from .._json import loads_strict
 from .errors import VerificationError
 from .keys import PINNED_PUBLISHER_KEYS
 
 SUPPORTED_ALGORITHM = "Ed25519"
 SUPPORTED_SIG_VERSION = 1
+MAX_SIGNATURE_SIDECAR_BYTES = 64 * 1024
+MAX_KEY_ID_LENGTH = 128
+MAX_SIGNED_AT_LENGTH = 128
+_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_COUNTERSIGN_REF_RE = re.compile(r"[a-z][a-z0-9-]{0,63}/[a-z][a-z0-9_]{0,63}@[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}\Z")
+
 
 # Domain separation: each non-artifact document type signs CONTEXT || payload,
 # never raw content, so no signature of one kind can be replayed as another.
@@ -50,6 +57,10 @@ def _load_public_key(key_id: str, publisher_keys: dict[str, str] | None = None):
     ``publisher_keys`` scopes trust to one namespace's registered keys (from a
     root-verified namespace registry). ``None`` means the pinned ROOT allowlist.
     """
+    if not isinstance(key_id, str) or not key_id or len(key_id) > MAX_KEY_ID_LENGTH:
+        raise VerificationError("signature key_id must be a non-empty string of at most 128 characters")
+    if publisher_keys is not None and not isinstance(publisher_keys, dict):
+        raise VerificationError("publisher_keys must be a key id to PEM mapping")
     trusted = PINNED_PUBLISHER_KEYS if publisher_keys is None else publisher_keys
     pem = trusted.get(key_id)
     if pem is None:
@@ -64,11 +75,13 @@ def _load_public_key(key_id: str, publisher_keys: dict[str, str] | None = None):
     except ImportError as exc:  # fail secure: no crypto, no trust
         raise VerificationError(
             "the 'cryptography' package is unavailable; refusing to treat the "
-            "artifact as verified (install vcp-sdk[hub])"
+            "artifact as verified (install this checkout with the [hub] extra)"
         ) from exc
+    if not isinstance(pem, str):
+        raise VerificationError(f"pinned key {key_id!r} is not a PEM string")
     try:
         key = load_pem_public_key(pem.encode("ascii"))
-    except (ValueError, TypeError) as exc:
+    except (UnicodeEncodeError, ValueError, TypeError) as exc:
         raise VerificationError(f"pinned key {key_id!r} failed to load: {exc}") from exc
     if not isinstance(key, Ed25519PublicKey):
         raise VerificationError(f"pinned key {key_id!r} is not an Ed25519 key")
@@ -77,13 +90,17 @@ def _load_public_key(key_id: str, publisher_keys: dict[str, str] | None = None):
 
 def parse_signature_sidecar(sig_bytes: bytes) -> dict[str, Any]:
     """Parse and structurally validate a ``.ed25519.sig`` JSON sidecar."""
+    if not isinstance(sig_bytes, bytes):
+        raise VerificationError("signature sidecar must be bytes")
+    if len(sig_bytes) > MAX_SIGNATURE_SIDECAR_BYTES:
+        raise VerificationError(f"signature sidecar exceeds size cap of {MAX_SIGNATURE_SIDECAR_BYTES} bytes")
     try:
-        sig_data = json.loads(sig_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        sig_data = loads_strict(sig_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise VerificationError(f"signature sidecar is not valid JSON: {exc}") from exc
     if not isinstance(sig_data, dict):
         raise VerificationError("signature sidecar must be a JSON object")
-    if sig_data.get("version") != SUPPORTED_SIG_VERSION:
+    if type(sig_data.get("version")) is not int or sig_data["version"] != SUPPORTED_SIG_VERSION:
         raise VerificationError(f"unsupported signature sidecar version {sig_data.get('version')!r}")
     if sig_data.get("algorithm") != SUPPORTED_ALGORITHM:
         raise VerificationError(
@@ -92,6 +109,15 @@ def parse_signature_sidecar(sig_bytes: bytes) -> dict[str, Any]:
     for field in ("key_id", "content_hash", "signature"):
         if not isinstance(sig_data.get(field), str) or not sig_data[field]:
             raise VerificationError(f"signature sidecar missing field {field!r}")
+    if len(sig_data["key_id"]) > MAX_KEY_ID_LENGTH:
+        raise VerificationError("signature sidecar key_id is too long")
+    if _SHA256_RE.fullmatch(sig_data["content_hash"]) is None:
+        raise VerificationError("signature sidecar content_hash must be 64 lowercase hexadecimal characters")
+    signed_at = sig_data.get("signed_at")
+    if signed_at is not None and (
+        not isinstance(signed_at, str) or not signed_at or len(signed_at) > MAX_SIGNED_AT_LENGTH
+    ):
+        raise VerificationError("signature sidecar signed_at must be a non-empty string of at most 128 characters")
     return sig_data
 
 
@@ -123,6 +149,12 @@ def verify_artifact_bytes(
     """
     if sig_bytes is None:
         raise VerificationError("artifact has no signature; unsigned artifacts are refused")
+    if not isinstance(content, bytes):
+        raise VerificationError("artifact content must be bytes")
+    if expected_sha256 is not None and (
+        not isinstance(expected_sha256, str) or _SHA256_RE.fullmatch(expected_sha256) is None
+    ):
+        raise VerificationError("expected sha256 must be 64 lowercase hexadecimal characters")
 
     sig_data = parse_signature_sidecar(sig_bytes)
 
@@ -146,11 +178,15 @@ def verify_artifact_bytes(
         signature = base64.b64decode(sig_data["signature"], validate=True)
     except (binascii.Error, ValueError) as exc:
         raise VerificationError(f"signature is not valid base64: {exc}") from exc
+    if len(signature) != 64:
+        raise VerificationError("Ed25519 signature must decode to exactly 64 bytes")
 
     try:
         from cryptography.exceptions import InvalidSignature
     except ImportError as exc:
-        raise VerificationError("the 'cryptography' package is unavailable; refusing (install vcp-sdk[hub])") from exc
+        raise VerificationError(
+            "the 'cryptography' package is unavailable; refusing (install this checkout with the [hub] extra)"
+        ) from exc
     try:
         public_key.verify(signature, content)
     except InvalidSignature as exc:
@@ -180,6 +216,10 @@ def verify_detached(
     """
     if sig_bytes is None:
         raise VerificationError(f"{what} is unsigned; refusing")
+    if not isinstance(content, bytes) or not isinstance(context, bytes):
+        raise VerificationError(f"{what} content and context must be bytes")
+    if not isinstance(what, str) or not what:
+        raise VerificationError("detached signature description must be a non-empty string")
     sig_data = parse_signature_sidecar(sig_bytes)
 
     content_sha256 = hashlib.sha256(content).hexdigest()
@@ -196,11 +236,15 @@ def verify_detached(
         signature = base64.b64decode(sig_data["signature"], validate=True)
     except (binascii.Error, ValueError) as exc:
         raise VerificationError(f"{what} signature is not valid base64: {exc}") from exc
+    if len(signature) != 64:
+        raise VerificationError(f"{what} Ed25519 signature must decode to exactly 64 bytes")
 
     try:
         from cryptography.exceptions import InvalidSignature
     except ImportError as exc:
-        raise VerificationError("the 'cryptography' package is unavailable; refusing (install vcp-sdk[hub])") from exc
+        raise VerificationError(
+            "the 'cryptography' package is unavailable; refusing (install this checkout with the [hub] extra)"
+        ) from exc
     try:
         public_key.verify(signature, context + content)
     except InvalidSignature as exc:
@@ -225,6 +269,8 @@ def countersign_message_context(ref: str) -> bytes:
     counter-signature cannot be replayed onto the same bytes republished under
     a different namespace, id, or version.
     """
+    if not isinstance(ref, str) or _COUNTERSIGN_REF_RE.fullmatch(ref) is None:
+        raise VerificationError("counter-signature ref must be canonical namespace/id@MAJOR.MINOR.PATCH")
     return COUNTERSIGN_CONTEXT + ref.encode("ascii") + b"\x00"
 
 

@@ -16,6 +16,7 @@ import sys
 import pytest
 from conftest import FIXED_SIGNED_AT, TEST_KEY_ID, make_sidecar, public_pem
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from vcp.hub.errors import VerificationError
 from vcp.hub.verify import VerifiedArtifact, verify_artifact_bytes
 

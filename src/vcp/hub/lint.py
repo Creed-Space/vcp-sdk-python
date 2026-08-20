@@ -12,10 +12,13 @@ reports anything it skipped — nothing is ever silently dropped.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .._json import loads_strict
 from .entry_schema import validate_entry
 from .errors import HubError, VerificationError
 from .namespace_registry import (
@@ -26,15 +29,58 @@ from .namespace_registry import (
 from .registry import (
     ARTIFACT_ID_RE,
     INDEX_VERSION,
+    MAX_FETCH_BYTES,
     NAMESPACE_RE,
     VERSION_RE,
+    validate_artifact_filename,
 )
 from .verify import (
     INDEX_CONTEXT,
+    MAX_SIGNATURE_SIDECAR_BYTES,
     verify_artifact_bytes,
     verify_countersignature,
     verify_detached,
 )
+
+MAX_HUB_VERSIONS = 10_000
+MAX_CHILD_DIRECTORIES = 10_000
+
+
+def _read_bounded(path: Path, cap: int, description: str) -> bytes:
+    try:
+        if path.is_symlink():
+            raise VerificationError(f"{description} must not be a symbolic link")
+        if path.stat().st_size > cap:
+            raise VerificationError(f"{description} exceeds size cap")
+        with path.open("rb") as handle:
+            data = handle.read(cap + 1)
+    except VerificationError:
+        raise
+    except OSError as exc:
+        raise VerificationError(f"cannot read {description}: {exc}") from exc
+    if len(data) > cap:
+        raise VerificationError(f"{description} exceeds size cap")
+    return data
+
+
+def _bounded_child_dirs(path: Path, description: str) -> list[Path]:
+    """List child directories with a cap and without following symlinks."""
+    children: list[Path] = []
+    try:
+        for child in path.iterdir():
+            if child.is_symlink():
+                if child.is_dir():
+                    raise VerificationError(f"{description} contains symbolic-link directory {child.name!r}")
+                continue
+            if child.is_dir():
+                children.append(child)
+                if len(children) > MAX_CHILD_DIRECTORIES:
+                    raise VerificationError(f"{description} exceeds child-directory cap of {MAX_CHILD_DIRECTORIES}")
+    except VerificationError:
+        raise
+    except OSError as exc:
+        raise VerificationError(f"cannot enumerate {description}: {exc}") from exc
+    return sorted(children)
 
 
 @dataclass
@@ -61,8 +107,8 @@ def _lint_version_dir(
     if not entry_path.is_file():
         raise VerificationError("entry.json is missing")
     try:
-        entry = json.loads(entry_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        entry = loads_strict(_read_bounded(entry_path, MAX_FETCH_BYTES, "entry.json").decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError, VerificationError) as exc:
         raise VerificationError(f"entry.json is not valid JSON: {exc}") from exc
     if not isinstance(entry, dict):
         raise VerificationError("entry.json must be a JSON object")
@@ -78,8 +124,10 @@ def _lint_version_dir(
     artifact_name = entry["distribution"].get("artifact")
     if not isinstance(artifact_name, str) or not artifact_name:
         raise VerificationError("entry names no artifact file")
-    if "/" in artifact_name or "\\" in artifact_name or artifact_name.startswith("."):
-        raise VerificationError(f"illegal artifact filename {artifact_name!r}")
+    try:
+        validate_artifact_filename(artifact_name)
+    except HubError as exc:
+        raise VerificationError(str(exc)) from exc
 
     artifact_path = version_dir / artifact_name
     sig_path = version_dir / (artifact_name + ".ed25519.sig")
@@ -90,10 +138,10 @@ def _lint_version_dir(
             f"signature sidecar {artifact_name}.ed25519.sig is missing; unsigned artifacts are refused"
         )
 
-    content = artifact_path.read_bytes()
+    content = _read_bounded(artifact_path, MAX_FETCH_BYTES, f"artifact file {artifact_name}")
     verify_artifact_bytes(
         content,
-        sig_path.read_bytes(),
+        _read_bounded(sig_path, MAX_SIGNATURE_SIDECAR_BYTES, f"signature sidecar {sig_path.name}"),
         expected_sha256=entry["content_sha256"],
         publisher_keys=ns_registry.publisher_keys(namespace),
     )
@@ -104,7 +152,15 @@ def _lint_version_dir(
     if entry["trust_tier"] == "verified":
         if not countersig_path.is_file():
             raise VerificationError("trust_tier is 'verified' but no .ed25519.countersig sidecar exists")
-        verify_countersignature(content, countersig_path.read_bytes(), ref=f"{namespace}/{artifact_id}@{version}")
+        verify_countersignature(
+            content,
+            _read_bounded(
+                countersig_path,
+                MAX_SIGNATURE_SIDECAR_BYTES,
+                f"counter-signature sidecar {countersig_path.name}",
+            ),
+            ref=f"{namespace}/{artifact_id}@{version}",
+        )
     elif countersig_path.is_file():
         raise VerificationError(
             "a counter-signature sidecar exists but trust_tier is not 'verified'; entry and sidecars must agree"
@@ -144,8 +200,10 @@ def lint_hub_tree(hub_root: str | Path, require_signed_index: bool = True) -> Li
         else:
             try:
                 verify_detached(
-                    index_path.read_bytes(),
-                    sig_path.read_bytes() if sig_path.is_file() else None,
+                    _read_bounded(index_path, MAX_FETCH_BYTES, "index.json"),
+                    _read_bounded(sig_path, MAX_SIGNATURE_SIDECAR_BYTES, "index signature")
+                    if sig_path.is_file()
+                    else None,
                     context=INDEX_CONTEXT,
                     what="registry index",
                 )
@@ -156,26 +214,45 @@ def lint_hub_tree(hub_root: str | Path, require_signed_index: bool = True) -> Li
         report.problems.append(f"{root} has no namespaces/ directory")
         return report
 
-    for ns_dir in sorted(p for p in ns_root.iterdir() if p.is_dir()):
+    version_count = 0
+    try:
+        namespace_dirs = _bounded_child_dirs(ns_root, "namespaces directory")
+    except VerificationError as exc:
+        report.problems.append(str(exc))
+        return report
+    for ns_dir in namespace_dirs:
         namespace = ns_dir.name
-        if not NAMESPACE_RE.match(namespace) or not ns_registry.is_registered(namespace):
+        if NAMESPACE_RE.fullmatch(namespace) is None or not ns_registry.is_registered(namespace):
             report.problems.append(
                 f"namespaces/{namespace}: namespace is not registered in "
                 f"{REGISTRY_FILENAME} (registered: {sorted(ns_registry.names)})"
             )
             continue
-        for id_dir in sorted(p for p in ns_dir.iterdir() if p.is_dir()):
+        try:
+            id_dirs = _bounded_child_dirs(ns_dir, f"namespaces/{namespace}")
+        except VerificationError as exc:
+            report.problems.append(str(exc))
+            continue
+        for id_dir in id_dirs:
             artifact_id = id_dir.name
-            if not ARTIFACT_ID_RE.match(artifact_id):
+            if ARTIFACT_ID_RE.fullmatch(artifact_id) is None:
                 report.problems.append(f"namespaces/{namespace}/{artifact_id}: invalid artifact id")
                 continue
-            version_dirs = sorted(p for p in id_dir.iterdir() if p.is_dir())
+            try:
+                version_dirs = _bounded_child_dirs(id_dir, f"namespaces/{namespace}/{artifact_id}")
+            except VerificationError as exc:
+                report.problems.append(str(exc))
+                continue
             if not version_dirs:
                 report.problems.append(f"namespaces/{namespace}/{artifact_id}: no version directories")
             for v_dir in version_dirs:
+                version_count += 1
+                if version_count > MAX_HUB_VERSIONS:
+                    report.problems.append(f"hub exceeds version-directory cap of {MAX_HUB_VERSIONS}")
+                    return report
                 version = v_dir.name
                 label = f"{namespace}/{artifact_id}@{version}"
-                if not VERSION_RE.match(version):
+                if VERSION_RE.fullmatch(version) is None:
                     report.problems.append(f"{label}: invalid version directory name")
                     continue
                 try:
@@ -202,9 +279,8 @@ def build_index(hub_root: str | Path) -> tuple[dict[str, Any], LintReport]:
     for label in report.checked:
         ref, _, version = label.partition("@")
         namespace, _, artifact_id = ref.partition("/")
-        entry = json.loads(
-            (root / "namespaces" / namespace / artifact_id / version / "entry.json").read_text(encoding="utf-8")
-        )
+        entry_path = root / "namespaces" / namespace / artifact_id / version / "entry.json"
+        entry = loads_strict(_read_bounded(entry_path, MAX_FETCH_BYTES, "entry.json").decode("utf-8"))
         record = artifacts.setdefault(ref, {"latest": version, "versions": {}})
         record["versions"][version] = {
             "content_sha256": entry["content_sha256"],
@@ -231,11 +307,11 @@ def _existing_sequence(root: Path) -> int:
     index_path = root / "index.json"
     if index_path.is_file():
         try:
-            existing = json.loads(index_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            existing = loads_strict(_read_bounded(index_path, MAX_FETCH_BYTES, "index.json").decode("utf-8"))
+        except (HubError, UnicodeDecodeError, ValueError, RecursionError):
             return 1
         seq = existing.get("sequence")
-        if isinstance(seq, int) and seq >= 1:
+        if type(seq) is int and seq >= 1:
             return seq
     return 1
 
@@ -244,5 +320,18 @@ def write_index(hub_root: str | Path) -> LintReport:
     """Regenerate ``<hub_root>/index.json`` from lint-passing entries."""
     root = Path(hub_root).resolve()
     index, report = build_index(root)
-    (root / "index.json").write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    root.mkdir(parents=True, exist_ok=True)
+    index_path = root / "index.json"
+    fd, raw_temp = tempfile.mkstemp(prefix=".index.json.", suffix=".tmp", dir=root)
+    temp_path = Path(raw_temp)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(index, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, index_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
     return report

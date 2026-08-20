@@ -33,9 +33,10 @@
         },
         "version": {
           "type": "string",
+          "maxLength": 17,
           "description": "Optional semantic version or alias",
           "oneOf": [
-            {"pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+            {"pattern": "^[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}$"},
             {"enum": ["latest", "canary"]}
           ]
         }
@@ -61,6 +62,7 @@
         "enum": ["F", "W", "P", "E", "T", "O", "V", "A", "H", "S", "R"]
       },
       "minItems": 1,
+      "maxItems": 11,
       "uniqueItems": true,
       "description": "Context scopes where this agent operates. Maps to VCP/S scope codes."
     },
@@ -125,8 +127,8 @@
     },
     "namespace": {
       "type": "string",
-      "pattern": "^[A-Z][A-Z0-9]{0,7}$",
-      "description": "Optional organizational namespace (1-8 uppercase chars). Required when persona is 'custom'."
+      "pattern": "^[A-Z]{1,8}$",
+      "description": "Optional organizational namespace (1-8 uppercase letters). Required when persona is 'custom'."
     },
     "metadata": {
       "type": "object",
@@ -134,14 +136,19 @@
       "properties": {
         "author": {
           "type": "string",
+          "maxLength": 500,
           "description": "Author or organization"
         },
         "license": {
           "type": "string",
+          "maxLength": 500,
           "description": "SPDX license identifier (e.g. CC-BY-4.0, Apache-2.0)"
         },
         "created": {
           "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
           "format": "date",
           "description": "Creation date (ISO 8601)"
         },
@@ -152,11 +159,13 @@
         },
         "extends": {
           "type": "string",
+          "maxLength": 256,
+          "pattern": "^[a-z][a-z0-9-]{0,31}(?:\\.[a-z][a-z0-9-]{0,31}){2,9}(?:@(?:[\\^~]?[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}(?:-[a-zA-Z0-9.-]+)?|latest|canary))?(?::[A-Z][A-Z0-9]{0,31})?$",
           "description": "VCP token of a parent profile this extends (e.g. family.safe.guide@1.0.0)"
         },
         "tags": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {"type": "string", "maxLength": 100},
           "maxItems": 10,
           "description": "Searchable tags"
         }
@@ -167,11 +176,53 @@
   "required": ["vcp_version", "identity", "persona", "adherence", "scopes"],
   "additionalProperties": false,
   "if": {
+    "required": ["persona"],
     "properties": {"persona": {"const": "custom"}}
   },
   "then": {
     "required": ["vcp_version", "identity", "persona", "adherence", "scopes", "namespace"]
   },
+  "allOf": [
+    {
+      "not": {
+        "required": ["scopes"],
+        "properties": {
+          "scopes": {
+            "allOf": [
+              {"contains": {"const": "F"}},
+              {"contains": {"const": "A"}}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "not": {
+        "required": ["scopes"],
+        "properties": {
+          "scopes": {
+            "allOf": [
+              {"contains": {"const": "V"}},
+              {"contains": {"const": "A"}}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "not": {
+        "required": ["scopes"],
+        "properties": {
+          "scopes": {
+            "allOf": [
+              {"contains": {"const": "H"}},
+              {"contains": {"const": "A"}}
+            ]
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "scope_descriptions": {
       "description": "Reference: VCP/S v2.0 scope code meanings",
@@ -226,7 +277,8 @@
       },
       "const": [
         ["F", "A"],
-        ["V", "A"]
+        ["V", "A"],
+        ["H", "A"]
       ]
     }
   }

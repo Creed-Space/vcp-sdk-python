@@ -49,7 +49,8 @@ def validate_entry(
         import jsonschema
     except ImportError as exc:  # fail secure: schema check is part of verification
         raise VerificationError(
-            "the 'jsonschema' package is unavailable; refusing to skip schema verification (install vcp-sdk[hub])"
+            "the 'jsonschema' package is unavailable; refusing to skip schema verification "
+            "(install this checkout with the [hub] extra)"
         ) from exc
 
     try:

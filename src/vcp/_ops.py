@@ -13,9 +13,13 @@ from __future__ import annotations
 from typing import Any
 
 from . import __version__
-from ._schwartz_classifier import HIGHER_ORDER_MAPPING, classify_principle, detect_tensions
+from ._schwartz_classifier import (
+    HIGHER_ORDER_MAPPING,
+    classify_principle,
+    detect_tensions,
+)
 from .context import PERSONAL_DIMENSIONS, SITUATIONAL_DIMENSIONS, Context
-from .csm1 import CSM1Code, Persona
+from .csm1 import V2_SCOPE_CHARS, CSM1Code, Persona, Scope
 from .lite import lite_to_csm1 as _lite_to_csm1
 from .lite import lite_to_token as _lite_to_token
 from .lite import validate_lite as _validate_lite
@@ -131,24 +135,32 @@ def lite_to_csm1(
     namespace: str | None = None,
 ) -> dict[str, Any]:
     """Convert VCP-Lite core fields to a CSM1 code, verifying it round-trips."""
+    if not isinstance(persona, str):
+        return {"error": "persona must be a string"}
     try:
-        Persona.from_name(persona)
+        parsed_persona = Persona.from_name(persona)
     except ValueError as e:
         return {"error": str(e)}
 
     if isinstance(adherence, bool) or not isinstance(adherence, int) or not (0 <= adherence <= 5):
         return {"error": "adherence must be an integer 0-5"}
 
-    document: dict[str, Any] = {"persona": persona.lower(), "adherence": adherence, "scopes": scopes}
-    if namespace:
-        document["namespace"] = namespace
-
-    code = _lite_to_csm1(document)
-
+    if not isinstance(scopes, list) or not scopes:
+        return {"error": "scopes must be a non-empty array"}
+    if len(scopes) > len(V2_SCOPE_CHARS):
+        return {"error": f"scopes must contain at most {len(V2_SCOPE_CHARS)} items"}
     try:
-        parsed = CSM1Code.parse(code)
+        if not all(isinstance(scope, str) and scope in V2_SCOPE_CHARS for scope in scopes):
+            raise ValueError("scope values must be canonical uppercase VCP/S scope codes")
+        parsed_scopes = [Scope(scope) for scope in scopes]
+        parsed = CSM1Code(
+            persona=parsed_persona,
+            adherence_level=adherence,
+            scopes=parsed_scopes,
+            namespace=namespace,
+        )
     except ValueError as e:
-        return {"error": f"Produced an invalid CSM1 code {code!r}: {e}"}
+        return {"error": str(e)}
 
     return {
         "csm1_code": parsed.encode(),

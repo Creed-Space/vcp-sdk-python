@@ -22,6 +22,7 @@ from conftest import (
     sign_index,
     write_version_dir,
 )
+
 from vcp.hub import cli
 from vcp.hub import install as install_mod
 from vcp.hub.errors import HubError, VerificationError
@@ -160,11 +161,22 @@ def test_syntactically_invalid_namespace_is_refused_by_validate_ref():
 
 @pytest.mark.parametrize(
     "ref",
-    ["creed-space/../etc", "creed-space/UPPER", "creed-space/x@1.0", "x"],
+    [
+        None,
+        1,
+        "",
+        "creed-space/../etc",
+        "creed-space/UPPER",
+        "creed-space/x@1.0",
+        "creed-space/item@1.0.0\n",
+        "creed-space/item\n",
+        "creed-space/item@1.0.0@2.0.0",
+        "x",
+    ],
 )
 def test_malformed_refs_are_refused(ref):
     with pytest.raises(HubError):
-        validate_ref(ref)
+        validate_ref(ref)  # type: ignore[arg-type]
 
 
 def test_install_refuses_an_entry_whose_hash_disagrees_with_the_artifact(hub, tmp_path):

@@ -6,6 +6,7 @@ import json
 
 import pytest
 from conftest import build_entry_dict, write_version_dir
+
 from vcp.hub.entry_schema import validate_entry
 from vcp.hub.errors import VerificationError
 from vcp.hub.lint import build_index, lint_hub_tree, write_index

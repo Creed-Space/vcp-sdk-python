@@ -113,9 +113,17 @@ def test_encode_context_round_trips_through_parse_of_wire_dimensions():
 
     encoded = run_session(body)
 
-    assert encoded["wire_format"] == "📍hospital|🎯peer|🔒legal||🧠focused4"
-    assert encoded["dimensions_set"] == ["space", "agency", "constraints", "cognitive_state"]
-    assert encoded["json_format"]["cognitive_state"] == {"category": "focused", "intensity": 4}
+    assert encoded["wire_format"] == "📍🏥|🎯🤝|🔒⚖️‖🧠focused:4"
+    assert encoded["dimensions_set"] == [
+        "space",
+        "agency",
+        "constraints",
+        "cognitive_state",
+    ]
+    assert encoded["json_format"]["cognitive_state"] == {
+        "category": "focused",
+        "intensity": 4,
+    }
     assert "Setting: hospital" in encoded["natural_language"]
 
     from vcp import Context
@@ -160,7 +168,13 @@ def test_lite_validate_rejects_bad_document():
         return call(
             await session.call_tool(
                 "vcp_validate_lite",
-                {"document": {"vcp_version": "lite-9.9", "persona": "wizard", "adherence": 11}},
+                {
+                    "document": {
+                        "vcp_version": "lite-9.9",
+                        "persona": "wizard",
+                        "adherence": 11,
+                    }
+                },
             )
         )
 
@@ -174,11 +188,19 @@ def test_lite_to_csm1_matches_parse_csm1():
         converted = call(
             await session.call_tool(
                 "vcp_lite_to_csm1",
-                {"persona": "sentinel", "adherence": 4, "scopes": ["P", "T", "W"], "namespace": "SEC"},
+                {
+                    "persona": "sentinel",
+                    "adherence": 4,
+                    "scopes": ["P", "T", "W"],
+                    "namespace": "SEC",
+                },
             )
         )
         rejected = call(
-            await session.call_tool("vcp_lite_to_csm1", {"persona": "wizard", "adherence": 4, "scopes": ["P"]})
+            await session.call_tool(
+                "vcp_lite_to_csm1",
+                {"persona": "wizard", "adherence": 4, "scopes": ["P"]},
+            )
         )
         return converted, rejected
 
@@ -196,13 +218,19 @@ def test_classify_principle_is_deterministic_and_reports_tension():
         first = call(
             await session.call_tool(
                 "creed_classify_principle",
-                {"principle_text": "Protect the safety and security of the family", "existing_values": ["power"]},
+                {
+                    "principle_text": "Protect the safety and security of the family",
+                    "existing_values": ["power"],
+                },
             )
         )
         second = call(
             await session.call_tool(
                 "creed_classify_principle",
-                {"principle_text": "Protect the safety and security of the family", "existing_values": ["power"]},
+                {
+                    "principle_text": "Protect the safety and security of the family",
+                    "existing_values": ["power"],
+                },
             )
         )
         return first, second

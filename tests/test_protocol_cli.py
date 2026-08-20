@@ -14,6 +14,7 @@ import pytest
 from vcp import _ops
 from vcp._schwartz_classifier import HIGHER_ORDER_MAPPING
 from vcp.hub.cli import main
+from vcp.protocol_cli import MAX_JSON_DOCUMENT_BYTES
 
 VALID_LITE = {
     "vcp_version": "lite-1.0",
@@ -132,6 +133,34 @@ def test_lite_validate_malformed_json(run, tmp_path):
     assert "not valid JSON" in err
 
 
+def test_lite_validate_rejects_duplicate_json_keys(run, tmp_path):
+    path = tmp_path / "duplicate.json"
+    path.write_text(
+        '{"vcp_version":"lite-1.0","vcp_version":"lite-9.9"}',
+        encoding="utf-8",
+    )
+    code, _, err = run("lite", "validate", str(path))
+    assert code == 1
+    assert "duplicate key" in err
+
+
+def test_lite_validate_rejects_invalid_utf8_without_traceback(run, tmp_path):
+    path = tmp_path / "invalid-utf8.json"
+    path.write_bytes(b"{\xff}")
+    code, _, err = run("lite", "validate", str(path))
+    assert code == 1
+    assert "not valid UTF-8" in err
+
+
+def test_lite_validate_refuses_oversized_document_before_reading(run, tmp_path):
+    path = tmp_path / "oversized.json"
+    with path.open("wb") as handle:
+        handle.truncate(MAX_JSON_DOCUMENT_BYTES + 1)
+    code, _, err = run("lite", "validate", str(path))
+    assert code == 1
+    assert "size cap" in err
+
+
 def test_lite_validate_rejects_non_object(run, tmp_path):
     path = tmp_path / "list.json"
     path.write_text("[1, 2, 3]", encoding="utf-8")
@@ -161,7 +190,7 @@ def test_encode_situational_dimensions(run):
     code, out, _ = run("encode", "--space", "hospital", "--agency", "peer")
     assert code == 0
     payload = json.loads(out)
-    assert "hospital" in payload["wire_format"]
+    assert payload["wire_format"] == "📍🏥|🎯🤝"
     assert payload["json_format"]["space"] == "hospital"
     assert set(payload["dimensions_set"]) == {"space", "agency"}
 
@@ -174,10 +203,15 @@ def test_encode_multi_value_dimension_repeats(run):
 
 def test_encode_personal_dimension_with_intensity(run):
     code, out, _ = run(
-        "encode", "--cognitive-state", "focused", "--cognitive-state-intensity", "4", "--quiet"
+        "encode",
+        "--cognitive-state",
+        "focused",
+        "--cognitive-state-intensity",
+        "4",
+        "--quiet",
     )
     assert code == 0
-    assert "focused4" in out
+    assert out.strip() == "‖🧠focused:4"
 
 
 def test_encode_no_dimensions_is_empty_not_an_error(run):
@@ -188,7 +222,13 @@ def test_encode_no_dimensions_is_empty_not_an_error(run):
 
 def test_encode_rejects_non_integer_intensity(run):
     with pytest.raises(SystemExit):
-        run("encode", "--cognitive-state", "focused", "--cognitive-state-intensity", "high")
+        run(
+            "encode",
+            "--cognitive-state",
+            "focused",
+            "--cognitive-state-intensity",
+            "high",
+        )
 
 
 # === vcp classify ===
@@ -207,7 +247,12 @@ def test_classify_returns_schwartz_value(run):
 
 def test_classify_reports_tensions_against_existing_values(run):
     code, out, _ = run(
-        "classify", "Aim for kindness in all responses", "--type", "aim_for", "--existing", "power"
+        "classify",
+        "Aim for kindness in all responses",
+        "--type",
+        "aim_for",
+        "--existing",
+        "power",
     )
     assert code == 0
     assert "tensions" in json.loads(out)
@@ -244,7 +289,8 @@ def test_cli_and_ops_agree_on_token_payload(run):
 
 
 @pytest.mark.parametrize(
-    "command", ["search", "install", "verify", "namespaces", "lint", "build-index", "publish"]
+    "command",
+    ["search", "install", "verify", "namespaces", "lint", "build-index", "publish"],
 )
 def test_hub_subcommands_still_parse(command):
     """Adding protocol commands must not displace any Creed Commons command.

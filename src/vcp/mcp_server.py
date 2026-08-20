@@ -10,7 +10,7 @@ the two surfaces cannot drift apart.
 Every tool is pure local computation. The server makes no network calls,
 reads no user data, and holds no state between calls.
 
-    pip install "vcp-sdk[mcp]"
+    python -m pip install ".[mcp]"
     vcp-mcp                      # stdio
     vcp-mcp --transport http     # Streamable HTTP on 127.0.0.1:8080
 """
@@ -86,7 +86,7 @@ def vcp_parse_csm1(code: str) -> str:
 
     CSM1 (Constitutional Semantics Mark 1) is a compact encoding for
     constitutional profiles. NANO/MICRO format is persona letter + adherence
-    level (0-5) + scopes (+X) + optional :NAMESPACE + optional @version.
+    level (0-5) + scopes (for example +F) + optional :NAMESPACE + optional @version.
     COMPACT format is 'CS1|persona|level|token|SCOPES'.
 
     Persona letters: N(anny), Z(sentinel), G(odparent), A(mbassador),
@@ -171,15 +171,16 @@ def vcp_encode_context(
     - body_signals: "neutral", "discomfort", "pain", "unwell", "recovering"
 
     Wire format separates situational dimensions with '|' and prefixes the
-    personal state section with '||'.
+    personal state section with the U+2016 '‖' band separator. Personal
+    intensity is separated from its category by ':'.
 
     Examples:
         vcp_encode_context(space="hospital", agency="peer", constraints=["legal"])
-        # => {"wire_format": "📍hospital|🎯peer|🔒legal", ...}
+        # => {"wire_format": "📍🏥|🎯🤝|🔒⚖️", ...}
 
         vcp_encode_context(space="office", cognitive_state="focused",
                            cognitive_state_intensity=4)
-        # => {"wire_format": "📍office||🧠focused4", ...}
+        # => {"wire_format": "📍🏢‖🧠focused:4", ...}
     """
     return _json(
         _ops.encode_context(
@@ -255,7 +256,7 @@ def vcp_lite_to_csm1(
     Persona: nanny/sentinel/godparent/ambassador/muse/mediator/custom
     Adherence: 0 (advisory) through 5 (absolute)
     Scopes: array of scope codes (F/W/P/E/T/O/V/A/H/S/R)
-    Namespace: optional, 1-8 uppercase alphanumeric chars; required for the
+    Namespace: optional, 1-8 uppercase ASCII letters; required for the
     custom persona.
 
     Examples:
@@ -335,6 +336,15 @@ def main(argv: list[str] | None = None) -> int:
     """Run the VCP MCP server over stdio (default) or Streamable HTTP."""
     import argparse
 
+    def port_number(value: str) -> int:
+        try:
+            port = int(value)
+        except (TypeError, ValueError) as exc:
+            raise argparse.ArgumentTypeError("port must be an integer from 1 to 65535") from exc
+        if not 1 <= port <= 65535:
+            raise argparse.ArgumentTypeError("port must be an integer from 1 to 65535")
+        return port
+
     parser = argparse.ArgumentParser(
         prog="vcp-mcp",
         description="MCP server exposing the VCP SDK (tokens, CSM1, VCP-Lite, context, classification).",
@@ -352,8 +362,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--port",
-        type=int,
-        default=int(os.environ.get("PORT", "8080")),
+        type=port_number,
+        default=os.environ.get("PORT", "8080"),
         help="http mode: port (default $PORT, else 8080)",
     )
     args = parser.parse_args(argv)

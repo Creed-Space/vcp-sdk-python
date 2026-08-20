@@ -20,10 +20,12 @@ from pathlib import Path
 from typing import Any
 
 from . import _ops
+from ._json import loads_strict
 from .context import PERSONAL_DIMENSIONS, SITUATIONAL_DIMENSIONS
 
 #: Dimensions that accept several values (repeat the flag).
 _MULTI = frozenset(_ops.MULTI_VALUE_DIMENSIONS)
+MAX_JSON_DOCUMENT_BYTES = 8 * 1024 * 1024
 
 
 class ProtocolError(Exception):
@@ -40,12 +42,23 @@ def _emit(payload: dict[str, Any], quiet_key: str | None, args: argparse.Namespa
 
 def _read_json_document(path: str) -> dict[str, Any]:
     try:
-        raw = Path(path).read_text(encoding="utf-8")
+        source = Path(path)
+        if source.stat().st_size > MAX_JSON_DOCUMENT_BYTES:
+            raise ProtocolError(f"cannot read {path}: document exceeds {MAX_JSON_DOCUMENT_BYTES} byte size cap")
+        with source.open("rb") as handle:
+            raw_bytes = handle.read(MAX_JSON_DOCUMENT_BYTES + 1)
+        if len(raw_bytes) > MAX_JSON_DOCUMENT_BYTES:
+            raise ProtocolError(f"cannot read {path}: document exceeds {MAX_JSON_DOCUMENT_BYTES} byte size cap")
+        raw = raw_bytes.decode("utf-8")
+    except ProtocolError:
+        raise
+    except UnicodeDecodeError as exc:
+        raise ProtocolError(f"{path} is not valid UTF-8: {exc}") from exc
     except OSError as exc:
         raise ProtocolError(f"cannot read {path}: {exc}") from exc
     try:
-        document = json.loads(raw)
-    except json.JSONDecodeError as exc:
+        document = loads_strict(raw)
+    except (ValueError, RecursionError) as exc:
         raise ProtocolError(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(document, dict):
         raise ProtocolError(f"{path} must contain a JSON object, got {type(document).__name__}")

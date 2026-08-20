@@ -44,13 +44,13 @@ from conftest import (
     write_version_dir,
 )
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from vcp.hub import cli
 from vcp.hub.errors import VerificationError
 from vcp.hub.install import install, verify_tree
 from vcp.hub.lint import lint_hub_tree, write_index
 from vcp.hub.namespace_registry import (
     FOUNDER_NAMESPACE,
-    check_community_name,
     parse_namespace_registry,
 )
 from vcp.hub.registry import RegistryClient
@@ -84,9 +84,7 @@ def rewrite_index(hub_root: Path, root_key: Ed25519PrivateKey, **changes) -> Non
     sign_index(hub_root, root_key)
 
 
-def community_doc(
-    root_key: Ed25519PrivateKey, community_key: Ed25519PrivateKey, sequence: int = 1
-) -> bytes:
+def community_doc(root_key: Ed25519PrivateKey, community_key: Ed25519PrivateKey, sequence: int = 1) -> bytes:
     return make_registry_doc(
         {
             FOUNDER_NAMESPACE: {TEST_KEY_ID: public_pem(root_key)},
@@ -230,6 +228,18 @@ def test_install_refuses_an_index_sequence_rollback(make_hub, tmp_path, test_pri
         install(REF, target, RegistryClient(str(hub)))
 
 
+def test_live_verify_refuses_an_index_sequence_rollback(make_hub, tmp_path, test_private_key):
+    hub = make_hub()
+    target = tmp_path / "installed"
+    rewrite_index(hub, test_private_key, sequence=2)
+    install(REF, target, RegistryClient(str(hub)))
+
+    rewrite_index(hub, test_private_key, sequence=1)
+
+    with pytest.raises(VerificationError, match="index sequence went BACKWARDS"):
+        verify_tree(target, registry=RegistryClient(str(hub)))
+
+
 def test_install_refuses_a_namespace_registry_sequence_rollback(
     tmp_path, test_private_key, community_private_key, pinned_test_key
 ):
@@ -271,9 +281,7 @@ def test_countersignature_is_bound_to_its_ref(pinned_test_key, test_private_key)
         verify_countersignature(content, countersig, ref=f"{FOUNDER_NAMESPACE}/other@1.0.0")
 
 
-def test_countersignature_replayed_at_another_version_is_a_lint_problem(
-    tmp_path, test_private_key, pinned_test_key
-):
+def test_countersignature_replayed_at_another_version_is_a_lint_problem(tmp_path, test_private_key, pinned_test_key):
     """End to end: republishing the same bytes at 2.0.0 while reusing 1.0.0's
     counter-signature does not carry the verified tier across."""
     hub = tmp_path / "hub"
@@ -293,37 +301,10 @@ def test_countersignature_replayed_at_another_version_is_a_lint_problem(
     assert any(f"{vid}@2.0.0" in p and "verification FAILED" in p for p in report.problems)
 
 
-# --- 7. community name policy ------------------------------------------------
+# --- 7. a community namespace can never claim ROOT identity ------------------
 
 
-@pytest.mark.parametrize(
-    "name, existing, match",
-    [
-        # The founder's brand space is reserved by PREFIX, not by an enumerable list.
-        ("creedlike-values", set(), "reserved"),
-        ("vcp-tools", set(), "reserved"),
-        ("acme_corp", set(), "must match"),  # charset: underscores never parse
-        ("acme-c0rp", {"acme-corp"}, "confusable"),  # homoglyph squat of a live name
-        # Homoglyph fold maps both i and 1 to l, so 'admin' and 'adm1n' both fold to
-        # 'admln' — the digit swap cannot dodge the reserved name.
-        ("adm1n", set(), "confusable"),
-    ],
-)
-def test_community_name_policy_refuses_squats(name, existing, match):
-    with pytest.raises(VerificationError, match=match):
-        check_community_name(name, existing)
-
-
-def test_community_name_policy_accepts_a_clean_name():
-    check_community_name("orchard-values", {"acme-corp", "other-org"})  # must not raise
-
-
-# --- 8. a community namespace can never claim ROOT identity ------------------
-
-
-def test_community_namespace_reusing_a_root_key_id_is_refused(
-    test_private_key, community_private_key, pinned_test_key
-):
+def test_community_namespace_reusing_a_root_key_id_is_refused(test_private_key, community_private_key, pinned_test_key):
     """Key ids are how the client names its root. A community namespace claiming
     'constitution-signer' would make its artifacts look root-signed."""
     doc = make_registry_doc(
@@ -337,9 +318,7 @@ def test_community_namespace_reusing_a_root_key_id_is_refused(
         parse_namespace_registry(doc, make_detached_sidecar(doc, test_private_key, NS_REGISTRY_CONTEXT))
 
 
-def test_community_namespace_reusing_a_root_pem_under_a_new_key_id_is_refused(
-    test_private_key, pinned_test_key
-):
+def test_community_namespace_reusing_a_root_pem_under_a_new_key_id_is_refused(test_private_key, pinned_test_key):
     """The key ITSELF is checked, not just its id: registering a pinned root PEM under
     a fresh id would delegate root signing authority into a community namespace."""
     doc = make_registry_doc(

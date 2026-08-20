@@ -26,6 +26,19 @@ from dataclasses import dataclass, field
 
 _CREED_SCHEME = "creed://"
 _VCP_SCHEME = "vcp://"
+MAX_TOKEN_INPUT_LENGTH = 4096
+_ISSUER_PATTERN = re.compile(
+    r"(?=.{1,253}\Z)"
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)"
+    r"(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*\Z",
+    re.IGNORECASE,
+)
+
+
+def _normalize_issuer(issuer: str) -> str:
+    if not isinstance(issuer, str) or _ISSUER_PATTERN.fullmatch(issuer) is None:
+        raise ValueError("VCP URI issuer must be a valid ASCII domain name")
+    return issuer.lower()
 
 
 def canonicalize_token(raw: str) -> str:
@@ -34,6 +47,10 @@ def canonicalize_token(raw: str) -> str:
     Steps: NFKC normalize, separate namespace (stays uppercase),
     lowercase path, strip whitespace, collapse dots, normalize version.
     """
+    if not isinstance(raw, str):
+        raise ValueError("Token must be a string")
+    if len(raw) > MAX_TOKEN_INPUT_LENGTH:
+        raise ValueError(f"Token input exceeds maximum length {MAX_TOKEN_INPUT_LENGTH}")
     token = unicodedata.normalize("NFKC", raw)
 
     namespace_suffix = ""
@@ -53,7 +70,7 @@ def canonicalize_token(raw: str) -> str:
 
     if namespace_suffix:
         token = f"{token}:{namespace_suffix}"
-    return token
+    return Token.parse(token).full
 
 
 def _normalize_version(version: str) -> str:
@@ -81,18 +98,26 @@ def tokens_equal(token1: str, token2: str) -> bool:
 
 def uri_to_canonical(uri: str) -> str:
     """Convert a ``creed://`` or ``vcp://`` URI to canonical token form."""
+    if not isinstance(uri, str):
+        raise ValueError("VCP URI must be a string")
+    if len(uri) > MAX_TOKEN_INPUT_LENGTH:
+        raise ValueError(f"VCP URI exceeds maximum length {MAX_TOKEN_INPUT_LENGTH}")
     if uri.startswith(_CREED_SCHEME):
         rest = uri[len(_CREED_SCHEME) :]
+        parts = rest.split("/", 1)
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            raise ValueError(f"URI missing issuer or path component: {uri}")
+        _normalize_issuer(parts[0])
+        path = parts[1]
     elif uri.startswith(_VCP_SCHEME):
-        rest = uri[len(_VCP_SCHEME) :]
+        path = uri[len(_VCP_SCHEME) :]
+        if not path or "/" in path:
+            raise ValueError(f"vcp:// URI requires a dotted token path: {uri}")
     else:
         raise ValueError(f"Not a VCP URI (expected creed:// or vcp:// scheme): {uri}")
 
-    parts = rest.split("/", 1)
-    if len(parts) < 2 or not parts[1]:
-        raise ValueError(f"URI missing path component: {uri}")
-
-    path = parts[1]
+    if ":" in path:
+        raise ValueError("VCP URI path cannot contain a namespace suffix")
     version: str | None = None
     if "@" in path:
         path, version = path.rsplit("@", 1)
@@ -100,7 +125,8 @@ def uri_to_canonical(uri: str) -> str:
     token = path.replace("/", ".")
     if version:
         token += f"@{version}"
-    return token
+    canonical = canonicalize_token(token)
+    return Token.parse(canonical).full
 
 
 @dataclass(frozen=True)
@@ -116,13 +142,14 @@ class Token:
     namespace: str | None = None
 
     SEGMENT_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
-    SEMVER_PATTERN = re.compile(r"^[\^~]?\d+\.\d+\.\d+(-[a-zA-Z0-9._-]+)?$")
-    VERSION_PATTERN = re.compile(r"^(?:[\^~]?\d+\.\d+\.\d+(?:-[a-zA-Z0-9._-]+)?|latest|canary)$")
-    NAMESPACE_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*$")
+    SEMVER_PATTERN = re.compile(r"^[\^~]?[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}(-[a-zA-Z0-9.-]+)?$")
+    VERSION_PATTERN = re.compile(r"^(?:[\^~]?[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}(?:-[a-zA-Z0-9.-]+)?|latest|canary)$")
+    NAMESPACE_PATTERN = re.compile(r"^[A-Z][A-Z0-9]{0,31}$")
     TOKEN_PATTERN = re.compile(
         r"^(?P<path>[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*){2,})"
-        r"(?:@(?P<version>[\^~]?\d+\.\d+\.\d+(?:-[a-zA-Z0-9._-]+)?|latest|canary))?"
-        r"(?::(?P<namespace>[A-Z][A-Z0-9]*))?$"
+        r"(?:@(?P<version>[\^~]?[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}"
+        r"(?:-[a-zA-Z0-9.-]+)?|latest|canary))?"
+        r"(?::(?P<namespace>[A-Z][A-Z0-9]{0,31}))?$"
     )
 
     MAX_LENGTH = 256
@@ -131,10 +158,32 @@ class Token:
     MAX_SEGMENTS = 10
 
     def __post_init__(self) -> None:
+        if not isinstance(self.segments, tuple):
+            raise ValueError("Token segments must be a tuple")
         if len(self.segments) < self.MIN_SEGMENTS:
             raise ValueError(f"Token requires at least {self.MIN_SEGMENTS} segments, got {len(self.segments)}")
         if len(self.segments) > self.MAX_SEGMENTS:
             raise ValueError(f"Token exceeds maximum {self.MAX_SEGMENTS} segments, got {len(self.segments)}")
+        for i, segment in enumerate(self.segments):
+            if not isinstance(segment, str):
+                raise ValueError(f"Segment {i + 1} has invalid format: {segment!r}")
+            if len(segment) > self.MAX_SEGMENT:
+                raise ValueError(f"Segment {i + 1} exceeds max length {self.MAX_SEGMENT}: {segment}")
+            if self.SEGMENT_PATTERN.fullmatch(segment) is None:
+                raise ValueError(f"Segment {i + 1} has invalid format: {segment!r}")
+        if self.version is not None:
+            if not isinstance(self.version, str) or len(self.version) > self.MAX_LENGTH:
+                raise ValueError(f"Invalid version format: {self.version}")
+            if self.VERSION_PATTERN.fullmatch(self.version) is None:
+                raise ValueError(f"Invalid version format: {self.version}")
+            object.__setattr__(self, "version", _normalize_version(self.version))
+        if self.namespace is not None:
+            if not isinstance(self.namespace, str) or len(self.namespace) > 32:
+                raise ValueError(f"Invalid namespace format: {self.namespace}")
+            if self.NAMESPACE_PATTERN.fullmatch(self.namespace) is None:
+                raise ValueError(f"Invalid namespace format: {self.namespace}")
+        if len(self.full) > self.MAX_LENGTH:
+            raise ValueError(f"Token exceeds max length {self.MAX_LENGTH}: {len(self.full)}")
 
     @classmethod
     def parse(cls, raw: str) -> Token:
@@ -142,18 +191,18 @@ class Token:
 
         Accepts canonical form, creed:// URIs, and vcp:// URIs.
         """
-        if not raw:
+        if not isinstance(raw, str) or not raw:
             raise ValueError("Token cannot be empty")
+        if len(raw) > MAX_TOKEN_INPUT_LENGTH:
+            raise ValueError(f"Token input exceeds maximum length {MAX_TOKEN_INPUT_LENGTH}")
 
         if raw.startswith((_CREED_SCHEME, _VCP_SCHEME)):
             raw = uri_to_canonical(raw)
 
-        raw = canonicalize_token(raw)
-
         if len(raw) > cls.MAX_LENGTH:
             raise ValueError(f"Token exceeds max length {cls.MAX_LENGTH}: {len(raw)}")
 
-        match = cls.TOKEN_PATTERN.match(raw)
+        match = cls.TOKEN_PATTERN.fullmatch(raw)
         if not match:
             raise ValueError(f"Invalid VCP/I token format: {raw}")
 
@@ -222,6 +271,7 @@ class Token:
 
     def to_uri(self, registry: str = "creed.space") -> str:
         """Convert to creed:// URI."""
+        registry = _normalize_issuer(registry)
         version_part = f"@{self.version}" if self.version else ""
         return f"creed://{registry}/{self.canonical}{version_part}"
 
@@ -233,7 +283,9 @@ class Token:
 
     def with_version(self, version: str) -> Token:
         """Return new token with specified version."""
-        if not self.VERSION_PATTERN.match(version):
+        if not isinstance(version, str) or len(version) > self.MAX_LENGTH:
+            raise ValueError(f"Invalid version format: {version}")
+        if self.VERSION_PATTERN.fullmatch(version) is None:
             raise ValueError(f"Invalid version format: {version}")
         return Token(
             segments=self.segments,
@@ -243,7 +295,9 @@ class Token:
 
     def with_namespace(self, namespace: str) -> Token:
         """Return new token with specified namespace."""
-        if not self.NAMESPACE_PATTERN.match(namespace):
+        if not isinstance(namespace, str) or len(namespace) > 32:
+            raise ValueError(f"Invalid namespace format: {namespace}")
+        if self.NAMESPACE_PATTERN.fullmatch(namespace) is None:
             raise ValueError(f"Invalid namespace format: {namespace}")
         return Token(
             segments=self.segments,
@@ -253,6 +307,8 @@ class Token:
 
     def matches_pattern(self, pattern: str) -> bool:
         """Check if token matches a glob-like pattern (* and **)."""
+        if not isinstance(pattern, str) or pattern.count("**") > 1:
+            return False
         parts = pattern.split(".")
 
         if "**" in parts:
@@ -275,6 +331,8 @@ class Token:
 
     def is_ancestor_of(self, other: Token) -> bool:
         """Check if this token is a prefix of another."""
+        if not isinstance(other, Token):
+            return False
         if len(self.segments) >= len(other.segments):
             return False
         return other.segments[: len(self.segments)] == self.segments

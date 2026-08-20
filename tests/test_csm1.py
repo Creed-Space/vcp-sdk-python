@@ -94,10 +94,10 @@ class TestCSM1Parse:
         assert Scope.FAMILY in code.scopes
         assert Scope.EDUCATION in code.scopes
 
-    def test_nano_lowercase(self):
-        code = CSM1Code.parse("n5+f+e")
-        assert code.persona == Persona.NANNY
-        assert code.scopes == [Scope.FAMILY, Scope.EDUCATION]
+    @pytest.mark.parametrize("invalid", ["n5+f+e", " N5+F+E", "N5+F+E\n"])
+    def test_wire_codes_are_strict_uppercase_without_outer_whitespace(self, invalid):
+        with pytest.raises(ValueError, match="Invalid CSM1"):
+            CSM1Code.parse(invalid)
 
     def test_micro_with_namespace(self):
         # ABNF: persona adherence scopes namespace version
@@ -130,9 +130,10 @@ class TestCSM1Parse:
             CSM1Code.parse("INVALID")
 
     def test_all_personas(self):
-        for char in "NZGAMDC":
+        for char in "NZGAMD":
             code = CSM1Code.parse(f"{char}3")
             assert code.persona.value == char
+        assert CSM1Code.parse("C3:ACME").persona is Persona.CUSTOM
 
 
 class TestCSM1Encode:
@@ -178,7 +179,7 @@ class TestCSM1Encode:
         assert code.encode() == original
 
     def test_roundtrip_all_scopes(self):
-        original = "G4+F+W+P+E+T+O+V+A+H+S+R"
+        original = "G4+F+W+P+E+T+O+V+H+S+R"
         code = CSM1Code.parse(original)
         assert code.encode() == original
 
@@ -191,12 +192,12 @@ class TestCSM1Canonical:
     def test_canonical_with_namespace(self):
         code = CSM1Code.parse("Z4+W+P:SEC")
         canonical = code.to_canonical()
-        assert canonical.startswith("Z4:SEC")
+        assert canonical == "Z4+P+W:SEC"
+        assert CSM1Code.parse(canonical) == CSM1Code.parse("Z4+P+W:SEC")
 
     def test_get_conflicts(self):
-        code = CSM1Code.parse("M2+F+A")  # Family + Adult = conflict
-        conflicts = code.get_conflicts()
-        assert len(conflicts) >= 1
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            CSM1Code.parse("M2+F+A")
 
 
 class TestAdherenceBehaviors:

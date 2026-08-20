@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from conftest import TEST_KEY_ID, artifact_text, make_sidecar
+
 from vcp.hub.errors import VerificationError
 from vcp.hub.lint import lint_hub_tree
 from vcp.hub.publish import build_entry, publish

@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from vcp.hub.keys import PINNED_PUBLISHER_KEYS
 from vcp.hub.lint import write_index
 from vcp.hub.namespace_registry import REGISTRY_FILENAME, REGISTRY_VERSION
