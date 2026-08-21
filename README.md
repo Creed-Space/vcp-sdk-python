@@ -7,11 +7,14 @@ signed value artifacts.
 - Protocol and docs: [valuecontextprotocol.org](https://valuecontextprotocol.org)
 - Creed Commons registry: [Creed-Space/vcp-hub](https://github.com/Creed-Space/vcp-hub)
 
-## Source candidate status
+## Legacy distribution status
 
-This repository is a legacy standalone implementation candidate. It is not the
-project-maintained VCP-SDK and no PyPI release or registry package name is
-claimed. Select and verify an exact commit, then install that checkout:
+This repository supplies the legacy standalone `vcp-sdk` 0.7.0 distribution on
+[PyPI](https://pypi.org/project/vcp-sdk/0.7.0/) and the
+`io.github.Creed-Space/vcp-mcp` 0.7.0 server entry in the MCP Registry. It is
+separate from, and is not, the project-maintained VCP-SDK. To review and run
+this source directly, select and verify an exact commit, then install that
+checkout:
 
 ```bash
 git checkout --detach <reviewed-vcp-sdk-python-commit>

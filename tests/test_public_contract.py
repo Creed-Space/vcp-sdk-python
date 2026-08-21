@@ -1,4 +1,4 @@
-"""Regression checks for the source-only package publication boundary."""
+"""Regression checks for the legacy package publication boundary."""
 
 import doctest
 import re
@@ -7,19 +7,17 @@ from pathlib import Path
 import vcp
 
 README = Path(__file__).parents[1] / "README.md"
-SOURCE = Path(__file__).parents[1] / "src"
+PYPROJECT = Path(__file__).parents[1] / "pyproject.toml"
 
 
-def test_readme_does_not_advertise_an_unratified_registry_install() -> None:
+def test_readme_identifies_the_published_legacy_distribution() -> None:
     text = README.read_text(encoding="utf-8")
     prose = re.sub(r"\s+", " ", text)
 
-    assert re.search(r"pip\s+install\s+['\"]?vcp-sdk(?:\[|['\"\s])", text) is None
-    assert "no PyPI release or registry package name is claimed" in prose
+    assert "legacy standalone `vcp-sdk` 0.7.0 distribution" in prose
+    assert "`io.github.Creed-Space/vcp-mcp` 0.7.0 server entry" in prose
+    assert "is not, the project-maintained VCP-SDK" in prose
     assert 'python -m pip install ".[hub]"' in text
-
-    packaged_source = "\n".join(path.read_text(encoding="utf-8") for path in SOURCE.rglob("*.py"))
-    assert re.search(r"(?:pip\s+install|install)\s+['\"]?vcp-sdk(?:\[|['\"\s])", packaged_source) is None
 
 
 def test_readme_warns_that_the_two_vcp_import_namespaces_cannot_coexist() -> None:
@@ -33,3 +31,20 @@ def test_package_docstring_examples_are_executable() -> None:
     result = doctest.testmod(vcp, raise_on_error=True)
 
     assert result.attempted == 6
+
+
+def test_mcp_runtime_dependency_stays_within_the_supported_major() -> None:
+    """A fresh install must not resolve MCP 2, which removed FastMCP."""
+    metadata = PYPROJECT.read_text(encoding="utf-8")
+    dev = re.search(r"(?ms)^dev = \[\n(.*?)^\]", metadata)
+
+    assert 'mcp = ["mcp>=1.2,<2"]' in metadata
+    assert dev is not None and '"mcp>=1.2,<2"' in dev.group(1)
+
+
+def test_package_metadata_uses_the_live_documentation_root() -> None:
+    """Published metadata must not send users to the removed /docs/sdk route."""
+    metadata = PYPROJECT.read_text(encoding="utf-8")
+
+    assert 'Documentation = "https://valuecontextprotocol.org/docs/"' in metadata
+    assert "valuecontextprotocol.org/docs/sdk" not in metadata
