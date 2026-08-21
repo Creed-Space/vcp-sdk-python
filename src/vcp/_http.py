@@ -17,7 +17,7 @@ import os
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.types import Receive, Scope, Send
 
@@ -95,6 +95,12 @@ def build_http_app(server: Server) -> Starlette:
     async def health(_request):
         return JSONResponse({"status": "ok"})
 
+    async def redirect_mcp(_request):
+        # Keep the redirect relative. Reverse proxies commonly terminate TLS
+        # before forwarding plain HTTP to the app, so Starlette's automatic
+        # absolute redirect can otherwise downgrade an advertised HTTPS URL.
+        return RedirectResponse(url="/mcp/", status_code=307)
+
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette):
         # run() sets up the manager's task group; it must live for the app's
@@ -102,12 +108,13 @@ def build_http_app(server: Server) -> Starlette:
         async with manager.run():
             yield
 
-    # Mount at /mcp. A bare `/mcp` request 307-redirects to `/mcp/`; this is the
-    # reference MCP behaviour and SDK/httpx clients follow it transparently.
+    # Mount at /mcp. The explicit bare-path route preserves the reference 307
+    # behaviour without trusting a proxy-derived request scheme.
     return Starlette(
         debug=False,
         routes=[
             Route("/health", health, methods=["GET"]),
+            Route("/mcp", redirect_mcp, methods=["GET", "POST", "DELETE"]),
             Mount("/mcp", app=handle_mcp),
         ],
         lifespan=lifespan,

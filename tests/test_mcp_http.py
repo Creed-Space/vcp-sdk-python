@@ -108,6 +108,20 @@ def test_http_tool_call_returns_payload(http_server):
     assert payload["domain"] == "family"
 
 
+def test_bare_mcp_redirect_is_relative(http_server):
+    """A TLS-terminating proxy must not turn the MCP redirect into plain HTTP."""
+    response = httpx.post(
+        f"{http_server}/mcp",
+        content=b"{}",
+        headers={"Content-Type": "application/json"},
+        follow_redirects=False,
+        timeout=REQUEST_TIMEOUT,
+    )
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/mcp/"
+
+
 def test_get_does_not_hang(http_server):
     """GET on the MCP endpoint returns 405 promptly rather than holding an SSE stream.
 
