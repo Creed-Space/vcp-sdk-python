@@ -16,10 +16,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned release + sha256 (from the release's registry_<ver>_checksums.txt):
+      # this binary runs with the repo's OIDC publishing identity, so it must
+      # not float with "latest". Bump deliberately, updating both lines.
       - name: Install mcp-publisher
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.1
+          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
         run: |
-          curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
-            | tar xz mcp-publisher
+          curl -sSL -o mcp-publisher_linux_amd64.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher_linux_amd64.tar.gz" | sha256sum -c
+          tar xzf mcp-publisher_linux_amd64.tar.gz mcp-publisher
           sudo mv mcp-publisher /usr/local/bin/
 
       - name: Login (GitHub OIDC)

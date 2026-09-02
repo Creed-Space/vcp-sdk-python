@@ -38,14 +38,14 @@ vcp-mcp = "vcp.mcp_server:main"
 [project.optional-dependencies]
 jsonschema = ["jsonschema>=4.0"]
 hub = ["cryptography>=42.0", "jsonschema>=4.0", "PyYAML>=6.0"]
-mcp = ["mcp>=1.2,<2"]
+mcp = ["mcp>=1.8,<2"]
 dev = [
     "pytest>=7.0",
     "coverage[toml]>=7.0",
     "jsonschema>=4.0",
     "cryptography>=42.0",
     "PyYAML>=6.0",
-    "mcp>=1.2,<2",
+    "mcp>=1.8,<2",
     "ruff>=0.8",
     "mypy>=1.10",
     "types-jsonschema",

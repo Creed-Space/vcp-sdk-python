@@ -29,6 +29,7 @@ from . import _ops
 
 # Re-exported for callers that import the spec versions from this module.
 VCP_SPEC_VERSION = _ops.VCP_SPEC_VERSION
+VCP_SEMANTICS_VERSION = _ops.VCP_SEMANTICS_VERSION
 VCP_CONTEXT_VERSION = _ops.VCP_CONTEXT_VERSION
 VCP_LITE_VERSION = _ops.VCP_LITE_VERSION
 
@@ -62,7 +63,9 @@ def vcp_validate_token(token: str) -> str:
     - namespace: uppercase namespace tier (optional)
 
     Token format: 3-10 dot-separated lowercase segments, optional @version
-    and :NAMESPACE.
+    and :NAMESPACE. creed:// and vcp:// URIs are also accepted and normalised
+    to canonical form (the project-maintained VCP-SDK's parse rejects URIs;
+    use the returned "canonical"/"full" value for interop).
 
     Examples:
         vcp_validate_token(token="family.safe.guide")
@@ -84,7 +87,7 @@ def vcp_validate_token(token: str) -> str:
 def vcp_parse_csm1(code: str) -> str:
     """Parse a CSM1 constitutional code.
 
-    CSM1 (Constitutional Semantics Mark 1) is a compact encoding for
+    CSM1 (Constitutional Safety Minicode) is a compact encoding for
     constitutional profiles. NANO/MICRO format is persona letter + adherence
     level (0-5) + scopes (for example +F) + optional :NAMESPACE + optional @version.
     COMPACT format is 'CS1|persona|level|token|SCOPES'.
@@ -92,15 +95,19 @@ def vcp_parse_csm1(code: str) -> str:
     Persona letters: N(anny), Z(sentinel), G(odparent), A(mbassador),
     M(use), D(mediator), C(ustom).
 
-    Returns the parsed persona, adherence level, scope names, and any
-    scope conflicts detected on the CSM1 conflict table.
+    Returns the parsed persona, adherence level, scope names, namespace,
+    version and (COMPACT only) the UVC identity token. Codes with mutually
+    exclusive scopes (F+A, V+A, H+A) or non-v2 scopes are rejected with
+    valid=false. "encoded" and "canonical" both carry the canonical form with
+    scopes sorted, so they string-compare across SDKs.
 
     Examples:
         vcp_parse_csm1(code="N5+F+E")
         # => {"valid": true, "persona": "NANNY", "adherence_level": 5,
-        #     "scopes": ["FAMILY", "EDUCATION"], "encoded": "N5+F+E", ...}
+        #     "scopes": ["FAMILY", "EDUCATION"], "encoded": "N5+E+F",
+        #     "canonical": "N5+E+F", "token": null, ...}
 
-        vcp_parse_csm1(code="A2+W+L@1.0.0")
+        vcp_parse_csm1(code="A2+W+O@1.0.0")
         # => {"valid": true, "persona": "AMBASSADOR", "version": "1.0.0", ...}
 
         vcp_parse_csm1(code="XYZ")
@@ -148,12 +155,16 @@ def vcp_encode_context(
     - time: "morning", "midday", "evening", "night"
     - space: "home", "office", "school", "hospital", "transit"
     - company: ["alone"], ["children", "family"], ["colleagues"], ["strangers"]
-    - culture: "global", "american", "european", "japanese"
-    - occasion: "normal", "celebration", "mourning", "emergency"
-    - environment: "outdoors", "hot", "cold", "quiet", "noisy"
+    - culture: communication style, NOT nationality — "high_context",
+      "low_context", "formal", "casual", "mixed"
+    - occasion: "normal", "celebration", "mourning", "emergency", "business"
+    - environment: "comfortable", "hot", "cold", "quiet", "noisy"
     - agency: "leader", "peer", "subordinate", "limited"
     - constraints: ["minimal"], ["legal"], ["economic"], ["time"]
-    - system_context: free-form description of the operating system context
+    - system_context: "online", "degraded", "offline", "sandboxed", "testing"
+
+    Values outside these vocabularies are passed through verbatim on the wire
+    (no canonical symbol), so other implementations may not understand them.
 
     Situational dimensions (4 extended, VEP-0004 — for embodied agents):
     - embodiment: "stationary", "navigating", "manipulating", "carrying",
@@ -181,9 +192,12 @@ def vcp_encode_context(
         vcp_encode_context(space="office", cognitive_state="focused",
                            cognitive_state_intensity=4)
         # => {"wire_format": "📍🏢‖🧠focused:4", ...}
+
+        vcp_encode_context(space="a|b")
+        # => {"valid": false, "error": "space contains a reserved wire separator"}
     """
-    return _json(
-        _ops.encode_context(
+    try:
+        payload = _ops.encode_context(
             time=time,
             space=space,
             company=company,
@@ -208,7 +222,9 @@ def vcp_encode_context(
             body_signals=body_signals,
             body_signals_intensity=body_signals_intensity,
         )
-    )
+    except ValueError as exc:
+        return _json({"valid": False, "error": str(exc)})
+    return _json(payload)
 
 
 # === VCP-Lite ===
@@ -250,8 +266,9 @@ def vcp_lite_to_csm1(
 ) -> str:
     """Convert VCP-Lite fields to a CSM1 code string.
 
-    Takes the core VCP-Lite fields and produces the equivalent CSM1 compact
-    encoding, then verifies the result round-trips through the CSM1 parser.
+    Takes the core VCP-Lite fields and produces the equivalent CSM1 code in
+    canonical form (scopes sorted), then verifies the result round-trips
+    through the CSM1 parser.
 
     Persona: nanny/sentinel/godparent/ambassador/muse/mediator/custom
     Adherence: 0 (advisory) through 5 (absolute)
@@ -261,7 +278,7 @@ def vcp_lite_to_csm1(
 
     Examples:
         vcp_lite_to_csm1(persona="nanny", adherence=5, scopes=["F", "E"])
-        # => {"csm1_code": "N5+F+E", ...}
+        # => {"csm1_code": "N5+E+F", ...}
 
         vcp_lite_to_csm1(persona="sentinel", adherence=4,
                          scopes=["P", "T", "W"], namespace="SEC")
@@ -287,7 +304,9 @@ def creed_classify_principle(
     model, where opposing higher-order dimensions collide.
 
     Schwartz values: power, achievement, hedonism, stimulation, self_direction,
-    universalism, benevolence, tradition, conformity, security.
+    universalism, benevolence, tradition, conformity, security. Each entry in
+    existing_values must be one of these (case-insensitive); anything else
+    returns an error payload rather than a silently empty tensions list.
 
     A confidence below 0.7 means the mapping is a best guess — inspect
     `candidates` and pick deliberately rather than trusting `schwartz_value`.
@@ -315,8 +334,9 @@ def vcp_status() -> str:
 
     Examples:
         vcp_status()
-        # => {"sdk_version": "0.5.0", "spec_version": "2.0.0",
-        #     "context_version": "3.2", "lite_version": "lite-1.0",
+        # => {"sdk_version": "<package version>", "spec_version": "3.1",
+        #     "semantics_version": "2.0.0", "context_version": "3.2",
+        #     "lite_version": "lite-1.0",
         #     "tools": [...], "capabilities": {...}, "network_access": false}
     """
     return _json(_ops.status())
@@ -328,7 +348,7 @@ def vcp_status() -> str:
 @mcp.resource("vcp://lite/examples")
 def get_lite_examples() -> str:
     """Bundled VCP-Lite example documents, keyed by filename."""
-    examples = {path.name: json.loads(path.read_text()) for path in sorted(_EXAMPLES_DIR.glob("*.json"))}
+    examples = {path.name: json.loads(path.read_text(encoding="utf-8")) for path in sorted(_EXAMPLES_DIR.glob("*.json"))}
     return _json(examples)
 
 
@@ -363,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--port",
         type=port_number,
-        default=os.environ.get("PORT", "8080"),
+        default=None,
         help="http mode: port (default $PORT, else 8080)",
     )
     args = parser.parse_args(argv)
@@ -371,6 +391,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.transport == "stdio":
         mcp.run(transport="stdio")
         return 0
+
+    # Resolve $PORT only in http mode, so a malformed PORT in the environment
+    # cannot stop a stdio launch that never uses it.
+    port = args.port
+    if port is None:
+        try:
+            port = port_number(os.environ.get("PORT", "8080"))
+        except argparse.ArgumentTypeError as exc:
+            parser.error(f"argument --port: {exc}")
 
     from ._http import check_bind_allowed, run_http
 
@@ -380,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
-    run_http(mcp._mcp_server, host=args.host, port=args.port)
+    run_http(mcp._mcp_server, host=args.host, port=port)
     return 0
 
 

@@ -25,7 +25,9 @@ from .lite import lite_to_token as _lite_to_token
 from .lite import validate_lite as _validate_lite
 from .token import Token
 
-VCP_SPEC_VERSION = "2.0.0"
+VCP_SPEC_VERSION = "3.1"
+#: VCP/S Semantics Layer (CSM1 grammar) version.
+VCP_SEMANTICS_VERSION = "2.0.0"
 VCP_CONTEXT_VERSION = "3.2"
 VCP_LITE_VERSION = "lite-1.0"
 
@@ -71,7 +73,11 @@ def validate_token(token: str) -> dict[str, Any]:
 
 
 def parse_csm1(code: str) -> dict[str, Any]:
-    """Parse a CSM1 constitutional code, reporting scopes and scope conflicts."""
+    """Parse a CSM1 constitutional code, reporting its persona, adherence and scopes.
+
+    Scope conflicts and deprecated scopes are rejected by the parser itself, so
+    they surface as ``{"valid": false, "error": ...}`` rather than as fields.
+    """
     try:
         parsed = CSM1Code.parse(code)
     except ValueError as e:
@@ -85,10 +91,9 @@ def parse_csm1(code: str) -> dict[str, Any]:
         "adherence_level": parsed.adherence_level,
         "scopes": [s.name for s in parsed.scopes],
         "scope_descriptions": {s.name: s.description for s in parsed.scopes},
-        "deprecated_scopes": [s.name for s in parsed.scopes if s.is_deprecated],
-        "conflicts": [[a.name, b.name] for a, b in parsed.get_conflicts()],
         "namespace": parsed.namespace,
         "version": parsed.version,
+        "token": parsed.token,
         "encoded": parsed.encode(),
         "canonical": parsed.to_canonical(),
     }
@@ -101,6 +106,7 @@ def encode_context(**dimensions: Any) -> dict[str, Any]:
     dimensions_set = [dim for dim in (*SITUATIONAL_DIMENSIONS, *PERSONAL_DIMENSIONS) if dim in payload]
 
     return {
+        "valid": True,
         "wire_format": context.to_wire(),
         "json_format": payload,
         "session_metadata": context.to_session_metadata(),
@@ -159,11 +165,14 @@ def lite_to_csm1(
             scopes=parsed_scopes,
             namespace=namespace,
         )
+        encoded = parsed.encode()
+        if CSM1Code.parse(encoded).encode() != encoded:
+            raise ValueError(f"CSM1 code does not round-trip: {encoded}")
     except ValueError as e:
         return {"error": str(e)}
 
     return {
-        "csm1_code": parsed.encode(),
+        "csm1_code": encoded,
         "persona": parsed.persona.name,
         "adherence_level": parsed.adherence_level,
         "scopes": [s.name for s in parsed.scopes],
@@ -177,6 +186,17 @@ def classify_principle_op(
     existing_values: list[str] | None = None,
 ) -> dict[str, Any]:
     """Map a principle to a Schwartz value and flag circular-model tensions."""
+    if existing_values:
+        if not isinstance(existing_values, list) or not all(isinstance(v, str) for v in existing_values):
+            return {"error": "existing_values must be a list of Schwartz value names"}
+        existing_values = [value.lower() for value in existing_values]
+        unknown = [value for value in existing_values if value not in HIGHER_ORDER_MAPPING]
+        if unknown:
+            return {
+                "error": f"unknown Schwartz values in existing_values: {', '.join(unknown)}",
+                "accepted_values": list(HIGHER_ORDER_MAPPING),
+            }
+
     classification = classify_principle(principle_text, principle_type)
 
     result: dict[str, Any] = {
@@ -200,6 +220,7 @@ def status() -> dict[str, Any]:
     return {
         "sdk_version": __version__,
         "spec_version": VCP_SPEC_VERSION,
+        "semantics_version": VCP_SEMANTICS_VERSION,
         "context_version": VCP_CONTEXT_VERSION,
         "lite_version": VCP_LITE_VERSION,
         "tools": list(TOOL_NAMES),

@@ -228,3 +228,18 @@ def test_cli_rejects_malformed_port_environment_cleanly():
     assert proc.returncode == 2
     assert b"port must be an integer from 1 to 65535" in proc.stderr
     assert b"Traceback" not in proc.stderr
+
+
+def test_stdio_launch_ignores_malformed_port_environment():
+    """$PORT is an http-mode concern; a desktop host exporting junk must not break stdio."""
+    env = os.environ.copy()
+    env["PORT"] = "not-a-port"
+    proc = subprocess.run(
+        [sys.executable, "-m", "vcp.mcp_server"],
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        timeout=30,
+        env=env,
+    )
+    assert proc.returncode == 0
+    assert b"port must be an integer" not in proc.stderr

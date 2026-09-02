@@ -1,6 +1,6 @@
 # Container image for the VCP MCP server (Streamable HTTP).
 #
-# Built for hosted deployment behind a gateway (Smithery). Local MCP clients
+# Built for hosted deployment (Smithery, Render). Local MCP clients
 # should use stdio instead — `pip install "vcp-sdk[mcp]"` and run `vcp-mcp`,
 # no container needed.
 FROM python:3.12-slim
@@ -14,15 +14,22 @@ COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir '.[mcp]'
 
-# This image serves HTTP behind Smithery's gateway, which is the only path in
-# and handles client auth, so it opts out of vcp-mcp's "no unauthenticated
-# non-loopback bind" guard. Set ONLY here — anyone running vcp-mcp directly
-# keeps the guard and has to make that choice deliberately.
+# vcp-mcp has no authentication. This image opts out of its "no unauthenticated
+# non-loopback bind" guard because it is deployed either behind a gateway that
+# handles client auth (Smithery) or, via render.yaml, as an intentionally
+# public, unauthenticated, stateless compute endpoint. In the public case put a
+# rate limit / WAF in front: the exposure is abuse of paid compute, not data.
+# Set ONLY here — anyone running vcp-mcp directly keeps the guard and has to
+# make that choice deliberately.
 ENV VCP_MCP_ALLOW_INSECURE_HTTP=true
 
-# The gateway injects $PORT at runtime; expose a sensible default for local runs.
+# The platform injects $PORT at runtime; expose a sensible default for local runs.
 ENV PORT=8080
 EXPOSE 8080
+
+# Pure compute needs no privileges: run as an unprivileged user.
+RUN useradd --system --no-create-home vcp
+USER vcp
 
 # sh -c (not JSON exec form) so ${PORT} expands at runtime; `exec` replaces the
 # shell so signals reach the server directly.

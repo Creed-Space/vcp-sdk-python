@@ -34,12 +34,14 @@ def test_package_docstring_examples_are_executable() -> None:
 
 
 def test_mcp_runtime_dependency_stays_within_the_supported_major() -> None:
-    """A fresh install must not resolve MCP 2, which removed FastMCP."""
+    """A fresh install must not resolve MCP 2, which removed FastMCP, nor
+    anything below 1.8, the first release with ``StreamableHTTPSessionManager``
+    and its ``json_response``/``stateless`` options that the HTTP transport uses."""
     metadata = PYPROJECT.read_text(encoding="utf-8")
     dev = re.search(r"(?ms)^dev = \[\n(.*?)^\]", metadata)
 
-    assert 'mcp = ["mcp>=1.2,<2"]' in metadata
-    assert dev is not None and '"mcp>=1.2,<2"' in dev.group(1)
+    assert 'mcp = ["mcp>=1.8,<2"]' in metadata
+    assert dev is not None and '"mcp>=1.8,<2"' in dev.group(1)
 
 
 def test_package_metadata_uses_the_live_documentation_root() -> None:

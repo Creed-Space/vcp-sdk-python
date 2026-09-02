@@ -146,7 +146,7 @@ def _cmd_publish(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="vcp",
-        description="Creed Commons client — install signed value artifacts (data, never code).",
+        description="VCP protocol tools and Creed Commons client — install signed value artifacts (data, never code).",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

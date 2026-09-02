@@ -171,7 +171,7 @@ class TestValidateLite:
 class TestLiteToCSM1:
     def test_family_safe_guide(self):
         doc = _load_example("family-safe-guide.vcp-lite.json")
-        assert lite_to_csm1(doc) == "N5+F+E"
+        assert lite_to_csm1(doc) == "N5+E+F"
 
     def test_security_ops(self):
         doc = _load_example("security-ops.vcp-lite.json")
@@ -183,7 +183,7 @@ class TestLiteToCSM1:
 
     def test_custom_org(self):
         doc = _load_example("custom-org.vcp-lite.json")
-        assert lite_to_csm1(doc) == "C3+W+O:ACME"
+        assert lite_to_csm1(doc) == "C3+O+W:ACME"
 
     def test_missing_persona_raises(self):
         with pytest.raises(ValueError):

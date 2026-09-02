@@ -120,6 +120,31 @@ class TestCSM1Parse:
         assert code.persona == Persona.NANNY
         assert code.adherence_level == 5
         assert len(code.scopes) == 2
+        assert code.token == "family.safe.guide"
+        assert code.namespace is None
+
+    def test_compact_custom_persona_carries_identity_in_token(self):
+        # Spec §2.8.3 example: COMPACT has no namespace field.
+        code = CSM1Code.parse("CS1|custom|3|company.acme.legal|O,W")
+        assert code.persona == Persona.CUSTOM
+        assert code.token == "company.acme.legal"
+        assert code.namespace is None
+
+    def test_compact_namespace_comes_from_token_suffix(self):
+        raw = "CS1|sentinel|4|secure.privacy.guardian@1.0.0:SEC|P,W"  # 52 chars
+        code = CSM1Code.parse(raw)
+        assert code.namespace == "SEC"
+        assert code.token == "secure.privacy.guardian@1.0.0:SEC"
+
+    def test_compact_rejects_codes_over_294_characters(self):
+        raw = "CS1|nanny|5|" + ".".join(["a" * 32] * 10) + "|F,E"
+        assert len(raw) > 294
+        with pytest.raises(ValueError, match="maximum length 294"):
+            CSM1Code.parse(raw)
+
+    def test_nano_micro_still_reject_custom_without_namespace(self):
+        with pytest.raises(ValueError, match="namespace"):
+            CSM1Code.parse("C3")
 
     def test_empty_raises(self):
         with pytest.raises(ValueError, match="cannot be empty"):
@@ -143,7 +168,9 @@ class TestCSM1Encode:
             adherence_level=5,
             scopes=[Scope.FAMILY, Scope.EDUCATION],
         )
-        assert code.encode() == "N5+F+E"
+        # encode() emits the canonical (sorted) scope order, matching the
+        # reference SDK and spec §2.10.1.
+        assert code.encode() == "N5+E+F"
 
     def test_encode_with_namespace(self):
         code = CSM1Code(
@@ -174,14 +201,20 @@ class TestCSM1Encode:
         assert result == "CS1|nanny|5|family.safe.guide|F,E"
 
     def test_roundtrip_nano(self):
-        original = "N5+F+E"
+        original = "N5+E+F"
         code = CSM1Code.parse(original)
         assert code.encode() == original
+        assert CSM1Code.parse("N5+F+E").encode() == original
 
     def test_roundtrip_all_scopes(self):
-        original = "G4+F+W+P+E+T+O+V+H+S+R"
+        original = "G4+E+F+H+O+P+R+S+T+V+W"
         code = CSM1Code.parse(original)
         assert code.encode() == original
+        assert CSM1Code.parse("G4+F+W+P+E+T+O+V+H+S+R").encode() == original
+
+    def test_micro_rejects_codes_over_45_characters(self):
+        with pytest.raises(ValueError, match="maximum length 45"):
+            CSM1Code.parse("N5" + "+F" * 22)  # 46 chars
 
 
 class TestCSM1Canonical:

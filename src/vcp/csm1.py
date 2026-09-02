@@ -1,6 +1,6 @@
 """VCP/S CSM1 Grammar Parser (v1.1).
 
-CSM1 (Constitutional Safety Minicode, Version 1) is a compact encoding for
+CSM1 (Constitutional Safety Minicode) is a compact encoding for
 constitutional configurations per VCP/S Semantics Layer Specification v2.0.
 
 Format (ABNF):
@@ -299,7 +299,8 @@ PERSONA_PROFILES: dict[str, dict[str, Any]] = {
 class CSM1Code:
     """Parsed CSM1 constitutional code.
 
-    Supports NANO, MICRO, and COMPACT encoding tiers.
+    Supports NANO, MICRO, and COMPACT encoding tiers.  ``token`` is the UVC
+    identity carried by the COMPACT tier; NANO/MICRO codes leave it ``None``.
     """
 
     persona: Persona
@@ -307,6 +308,7 @@ class CSM1Code:
     scopes: list[Scope] = field(default_factory=list)
     namespace: str | None = None
     version: str | None = None
+    token: str | None = None
 
     PATTERN = re.compile(
         r"^(?P<persona>[NZGAMDC])"
@@ -321,7 +323,9 @@ class CSM1Code:
     )
 
     COMPACT_PATTERN = re.compile(r"CS1\|([a-z]+)\|([0-5])\|([^|]{1,255})\|([FWPETOVAHSR](?:,[FWPETOVAHSR])*)\Z")
-    MAX_LENGTH = 50
+    # Spec §2.8 bounds: MICRO codes are 2-45 characters, COMPACT codes 18-294.
+    MAX_MICRO_LENGTH = 45
+    MAX_COMPACT_LENGTH = 294
 
     def __post_init__(self) -> None:
         if not isinstance(self.persona, Persona):
@@ -344,7 +348,13 @@ class CSM1Code:
         if conflicts:
             rendered = ", ".join(f"{left.value}+{right.value}" for left, right in conflicts)
             raise ValueError(f"CSM1 contains mutually exclusive scopes: {rendered}")
-        if self.persona is Persona.CUSTOM and not self.namespace:
+        if self.token is not None:
+            if not isinstance(self.token, str):
+                raise ValueError("token must be a string")
+            Token.parse(self.token)
+        # COMPACT codes carry the custom identity in the UVC token rather than
+        # in a namespace field (spec §2.8.3: CS1|custom|3|company.acme.legal|O,W).
+        if self.persona is Persona.CUSTOM and not self.namespace and not self.token:
             raise ValueError("Custom persona requires a namespace")
         if self.namespace is not None and (
             not isinstance(self.namespace, str) or re.fullmatch(r"[A-Z]{1,8}", self.namespace) is None
@@ -359,8 +369,8 @@ class CSM1Code:
             is None
         ):
             raise ValueError("Invalid CSM1 version")
-        if len(self.encode()) > self.MAX_LENGTH:
-            raise ValueError(f"CSM1 code exceeds maximum length {self.MAX_LENGTH}")
+        if len(self.encode()) > self.MAX_MICRO_LENGTH:
+            raise ValueError(f"CSM1 code exceeds maximum length {self.MAX_MICRO_LENGTH}")
 
     @classmethod
     def parse(cls, raw: str) -> CSM1Code:
@@ -371,11 +381,12 @@ class CSM1Code:
         """
         if not isinstance(raw, str) or not raw:
             raise ValueError("CSM1 code cannot be empty")
-        if len(raw) > cls.MAX_LENGTH:
-            raise ValueError(f"CSM1 code exceeds maximum length {cls.MAX_LENGTH}")
-
         if raw.startswith("CS1|"):
+            if len(raw) > cls.MAX_COMPACT_LENGTH:
+                raise ValueError(f"CSM1 code exceeds maximum length {cls.MAX_COMPACT_LENGTH}")
             return cls._parse_compact(raw)
+        if len(raw) > cls.MAX_MICRO_LENGTH:
+            raise ValueError(f"CSM1 code exceeds maximum length {cls.MAX_MICRO_LENGTH}")
 
         match = cls.PATTERN.fullmatch(raw)
         if not match:
@@ -411,7 +422,7 @@ class CSM1Code:
 
         persona_name = match.group(1).lower()
         adherence = int(match.group(2))
-        Token.parse(match.group(3))
+        token = Token.parse(match.group(3))
         scope_str = match.group(4)
 
         persona = Persona.from_name(persona_name)
@@ -421,18 +432,18 @@ class CSM1Code:
             persona=persona,
             adherence_level=adherence,
             scopes=scopes,
+            namespace=token.namespace,
+            token=token.full,
         )
 
     def encode(self) -> str:
-        """Encode to NANO format (e.g. 'N5+F+E')."""
-        result = f"{self.persona.value}{self.adherence_level}"
-        if self.scopes:
-            result += "+" + "+".join(s.value for s in self.scopes)
-        if self.namespace:
-            result += f":{self.namespace}"
-        if self.version:
-            result += f"@{self.version}"
-        return result
+        """Encode to the canonical wire form (e.g. 'N5+E+F').
+
+        Scopes are emitted in sorted order per spec §2.10.1, so codes built
+        from the same fields compare equal as strings regardless of the order
+        the scopes were given in.  ``to_nano``/``to_micro`` preserve input order.
+        """
+        return self.to_canonical()
 
     def to_nano(self) -> str:
         """Serialize to NANO format (persona + adherence + scopes only)."""
@@ -457,8 +468,8 @@ class CSM1Code:
         if not scope_list:
             raise ValueError("COMPACT CSM1 requires at least one scope")
         compact = f"CS1|{self.persona.persona_name}|{self.adherence_level}|{token}|{scope_list}"
-        if len(compact) > self.MAX_LENGTH:
-            raise ValueError(f"CSM1 code exceeds maximum length {self.MAX_LENGTH}")
+        if len(compact) > self.MAX_COMPACT_LENGTH:
+            raise ValueError(f"CSM1 code exceeds maximum length {self.MAX_COMPACT_LENGTH}")
         return compact
 
     def to_canonical(self) -> str:

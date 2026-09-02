@@ -107,7 +107,7 @@ def test_lite_validate_valid(run, lite_file):
     assert code == 0
     payload = json.loads(out)
     assert payload["valid"] is True
-    assert payload["csm1_code"] == "N5+F+E"
+    assert payload["csm1_code"] == "N5+E+F"
     assert payload["token"] == "family.safe.guide"
 
 
@@ -172,7 +172,7 @@ def test_lite_validate_rejects_non_object(run, tmp_path):
 def test_lite_to_csm1(run, lite_file):
     code, out, _ = run("lite", "to-csm1", lite_file(VALID_LITE), "--quiet")
     assert code == 0
-    assert out.strip() == "N5+F+E"
+    assert out.strip() == "N5+E+F"
 
 
 def test_lite_to_csm1_refuses_invalid_document(run, lite_file):
@@ -306,3 +306,19 @@ def test_hub_subcommands_still_parse(command):
 def test_unknown_subcommand_is_rejected():
     with pytest.raises(SystemExit):
         main(["definitely-not-a-command"])
+
+
+def test_classify_rejects_unknown_existing_values(run):
+    """A typo in --existing must not read as 'no tension'."""
+    code, out, err = run("classify", "Aim for kindness in all responses", "--existing", "notavalue")
+    assert code == 1
+    assert out == ""
+    payload = json.loads(err)
+    assert "unknown Schwartz values" in payload["error"]
+    assert "tensions" not in payload
+
+
+def test_classify_existing_values_are_case_insensitive(run):
+    code, out, _ = run("classify", "Aim for kindness in all responses", "--existing", "POWER")
+    assert code == 0
+    assert json.loads(out)["tensions"]

@@ -39,6 +39,13 @@ document = {"vcp_version": "lite-1.0", "identity": identity, "persona": "nanny",
 errors = validate_lite(document)
 ```
 
+`CSM1Code.encode()` (and `str(code)`) emits the canonical form with scopes
+sorted (`N5+F+E` encodes as `N5+E+F`), matching the project-maintained
+VCP-SDK and spec §2.10.1; `to_nano()`/`to_micro()` preserve input order.
+`Token.parse` also accepts `creed://` and `vcp://` URIs and normalises them to
+canonical form — a superset of the reference SDK, whose `parse` takes only
+the bare token grammar.
+
 ## Creed Commons — signed value artifacts
 
 Creed Commons distributes constitutions, creeds, and detector configs as
@@ -89,7 +96,7 @@ about, for shell consumption:
 
 ```bash
 $ vcp lite to-csm1 agent.json --quiet
-N5+F+E
+N5+E+F
 
 $ vcp encode --space office --constraints legal --constraints time --quiet
 📍🏢|🔒⚖️⏱️
@@ -139,7 +146,7 @@ Claude Desktop / Claude Code config:
 |---|---|
 | `vcp_status` | SDK/spec versions, capabilities, dimension and persona vocabularies |
 | `vcp_validate_token` | Parse a VCP/I token into domain / approach / role / version / namespace |
-| `vcp_parse_csm1` | Parse a CSM1 code; reports scopes, deprecations, and scope conflicts |
+| `vcp_parse_csm1` | Parse a CSM1 code into persona / adherence / scopes / namespace / version (conflicting or deprecated scopes are rejected) |
 | `vcp_encode_context` | Encode the 18 VCP/A context dimensions to wire, JSON, and session metadata |
 | `vcp_validate_lite` | Validate a VCP-Lite document; returns the equivalent CSM1 code and token |
 | `vcp_lite_to_csm1` | Convert VCP-Lite persona/adherence/scopes to a CSM1 code |
@@ -161,15 +168,18 @@ replica. Only `POST /mcp` is served — `GET` would otherwise hold an idle event
 stream open per connection, so it is refused with a clean JSON-RPC 405. A
 `GET /health` endpoint returns `{"status": "ok"}`.
 
-The server has no authentication of its own, so binding beyond loopback
-requires an explicit opt-in:
+The server has no authentication, so binding beyond loopback requires an
+explicit opt-in:
 
 ```bash
 VCP_MCP_ALLOW_INSECURE_HTTP=true vcp-mcp --transport http --host 0.0.0.0
 ```
 
-Set that only where a gateway or reverse proxy fronts the server and handles
-client auth.
+Set that only when either a gateway or reverse proxy fronts the server and
+handles client auth, or you intentionally run it as a public, unauthenticated,
+stateless compute endpoint (as `render.yaml` in this repo does). In the latter
+case put a rate limit / WAF in front of it: the exposure is abuse of paid
+compute rather than data, since the server holds no state and reads nothing.
 
 ## Development
 

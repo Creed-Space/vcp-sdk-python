@@ -133,6 +133,9 @@ def _cmd_classify(args: argparse.Namespace) -> int:
         principle_type=args.type,
         existing_values=args.existing or None,
     )
+    if "error" in result:
+        print(json.dumps(result, indent=2, ensure_ascii=False), file=sys.stderr)
+        return 1
     _emit(result, "schwartz_value", args)
     return 0
 
@@ -213,7 +216,11 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--existing",
         action="append",
-        help="an existing Schwartz value to check for tension (repeatable)",
+        help=(
+            "an existing Schwartz value to check for tension (repeatable): power, achievement, "
+            "hedonism, stimulation, self_direction, universalism, benevolence, tradition, "
+            "conformity, security"
+        ),
     )
     _add_quiet(p, "Schwartz value")
     p.set_defaults(func=_cmd_classify)

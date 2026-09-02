@@ -304,5 +304,5 @@ def load_schema() -> dict[str, Any]:
     Returns:
         Parsed JSON Schema dict.
     """
-    with open(_SCHEMA_PATH) as f:
+    with open(_SCHEMA_PATH, encoding="utf-8") as f:
         return json.load(f)

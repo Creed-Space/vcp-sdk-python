@@ -154,13 +154,13 @@ def test_lite_validate_then_parse_csm1():
 
     assert validated["valid"] is True
     assert validated["errors"] == []
-    assert validated["csm1_code"] == "N5+F+E"
+    assert validated["csm1_code"] == "N5+E+F"
     assert validated["token"] == "family.safe.guide"
 
     assert parsed["valid"] is True
     assert parsed["persona"] == "NANNY"
     assert parsed["adherence_level"] == 5
-    assert parsed["scopes"] == ["FAMILY", "EDUCATION"]
+    assert parsed["scopes"] == ["EDUCATION", "FAMILY"]
 
 
 def test_lite_validate_rejects_bad_document():
@@ -266,3 +266,22 @@ def test_lite_examples_resource():
     examples = json.loads(content.contents[0].text)
     assert "family-safe-guide.vcp-lite.json" in examples
     assert examples["family-safe-guide.vcp-lite.json"]["persona"] == "nanny"
+
+
+def test_encode_context_returns_structured_error_like_its_siblings():
+    async def body(session):
+        return call(await session.call_tool("vcp_encode_context", {"space": "a|b"}))
+
+    result = run_session(body)
+    assert result["valid"] is False
+    assert "reserved wire separator" in result["error"]
+
+
+def test_parse_csm1_surfaces_compact_token():
+    async def body(session):
+        return call(await session.call_tool("vcp_parse_csm1", {"code": "CS1|custom|3|company.acme.legal|O,W"}))
+
+    result = run_session(body)
+    assert result["valid"] is True
+    assert result["token"] == "company.acme.legal"
+    assert result["encoded"] == "C3+O+W"
