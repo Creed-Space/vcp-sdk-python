@@ -1,5 +1,11 @@
 # vcp-sdk
 
+**Legacy package.** `vcp-sdk` 0.8.0 is the legacy standalone distribution. The
+maintained SDK is [VCP-SDK](https://github.com/Creed-Space/VCP-SDK), published on
+PyPI as [`value-context-protocol`](https://pypi.org/project/value-context-protocol/),
+a different distribution. Both use the `vcp` import namespace, so install them in
+separate virtual environments.
+
 Python SDK for the **Value Context Protocol (VCP)** (parsing and validating VCP
 tokens, CSM1 codes and VCP-Lite documents), plus the **Creed Commons** client
 (`vcp` CLI) for installing signed value artifacts.

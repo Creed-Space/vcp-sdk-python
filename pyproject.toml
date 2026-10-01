@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "vcp-sdk"
 version = "0.8.0"
-description = "Value Context Protocol SDK — parse and validate VCP tokens, CSM1 codes and VCP-Lite documents"
+description = "Value Context Protocol SDK (legacy) — parse and validate VCP tokens, CSM1 codes and VCP-Lite documents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
