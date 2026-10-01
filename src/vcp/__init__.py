@@ -1,4 +1,4 @@
-"""VCP SDK — Value Context Protocol for portable AI ethics.
+"""VCP SDK — parse and validate Value Context Protocol (VCP) formats.
 
 Validate tokens, parse CSM1 codes, and work with VCP-Lite definitions.
 

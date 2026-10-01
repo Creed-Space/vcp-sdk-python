@@ -1,8 +1,8 @@
 # vcp-sdk
 
-Python SDK for the **Value Context Protocol (VCP)** — portable AI ethics
-validation — plus the **Creed Commons** client (`vcp` CLI) for installing
-signed value artifacts.
+Python SDK for the **Value Context Protocol (VCP)** (parsing and validating VCP
+tokens, CSM1 codes and VCP-Lite documents), plus the **Creed Commons** client
+(`vcp` CLI) for installing signed value artifacts.
 
 - Protocol and docs: [valuecontextprotocol.org](https://valuecontextprotocol.org)
 - Creed Commons registry: [Creed-Space/vcp-hub](https://github.com/Creed-Space/vcp-hub)
