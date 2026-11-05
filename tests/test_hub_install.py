@@ -234,7 +234,7 @@ def test_install_path_never_executes_artifact(tmp_path, monkeypatch, test_privat
         ARTIFACT_ID,
         "1.0.0",
         content,
-        make_sidecar(content, test_private_key),
+        make_sidecar(content, test_private_key, ref=f"creed-space/{ARTIFACT_ID}@1.0.0"),
         build_entry_dict(ARTIFACT_ID, "1.0.0", content),
     )
     from vcp.hub.lint import write_index

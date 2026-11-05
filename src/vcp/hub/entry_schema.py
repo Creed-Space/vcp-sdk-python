@@ -9,6 +9,7 @@ Schema validation is part of the install verification chain, so a missing
 from __future__ import annotations
 
 import json
+import unicodedata
 from importlib import resources
 from typing import Any, Iterable
 
@@ -16,6 +17,12 @@ from .errors import VerificationError
 from .namespace_registry import FOUNDER_NAMESPACE
 
 _SCHEMA_RESOURCE = "registry_entry.schema.json"
+
+# Display fields copied verbatim into the signed index and printed by
+# `vcp search`. Control/format characters there can rewrite terminal output
+# (CR over the trust tier, ANSI escapes), so distributable entries refuse them.
+_DISPLAY_FIELDS = ("name", "description")
+_FORBIDDEN_DISPLAY_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
 
 def load_entry_schema() -> dict[str, Any]:
@@ -74,3 +81,12 @@ def validate_entry(
         )
     if not entry["distribution"].get("signatures"):
         raise VerificationError("registry entry declares no signatures; unsigned artifacts are refused")
+    for field in _DISPLAY_FIELDS:
+        value = entry.get(field)
+        if isinstance(value, str):
+            bad = next((ch for ch in value if unicodedata.category(ch) in _FORBIDDEN_DISPLAY_CATEGORIES), None)
+            if bad is not None:
+                raise VerificationError(
+                    f"registry entry {field!r} contains control/format character U+{ord(bad):04X}; "
+                    "display text must be printable"
+                )

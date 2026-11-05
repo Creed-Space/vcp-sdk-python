@@ -8,7 +8,7 @@ Creed Commons:
     vcp namespaces [--registry URL|PATH]
     vcp lint <hub_root>
     vcp build-index <hub_root>
-    vcp publish <artifact.md> --hub <hub_root> [--base-entry entry.json]
+    vcp publish <artifact.md> --hub <hub_root> [--base-entry entry.json] [--signature SIDECAR]
 
 Protocol operations (see :mod:`vcp.protocol_cli`):
 
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import unicodedata
 from pathlib import Path
 
 from .._json import loads_strict
@@ -59,6 +60,33 @@ def _read_base_entry(path: str) -> dict:
     return parsed
 
 
+# Character categories that can move the cursor, recolour or erase terminal
+# output, or hide text: C0/C1 controls (CR, ESC, ...), format characters
+# (bidi overrides, zero-width), and the Unicode line/paragraph separators.
+_UNPRINTABLE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def _printable(value: object, keep_newlines: bool = False) -> str:
+    """Escape terminal-control characters in registry-supplied text before printing.
+
+    Publisher-controlled strings (entry name/description, values echoed in
+    lint errors) reach stdout; a raw CR or ANSI sequence could overwrite the
+    trust tier shown or forge result lines. Escapes stay visible (``\\x1b``) so
+    the tampering is evident rather than silently dropped. ``keep_newlines``
+    preserves the line structure of our own multi-line messages.
+    """
+    out = []
+    for ch in str(value):
+        if keep_newlines and ch == "\n":
+            out.append(ch)
+        elif unicodedata.category(ch) in _UNPRINTABLE_CATEGORIES:
+            code = ord(ch)
+            out.append(f"\\x{code:02x}" if code <= 0xFF else f"\\u{code:04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _cmd_search(args: argparse.Namespace) -> int:
     client = RegistryClient(args.registry)
     index = client.index()
@@ -71,13 +99,13 @@ def _cmd_search(args: argparse.Namespace) -> int:
         if query in haystack:
             hits.append((ref, latest, meta))
     if not hits:
-        print(f"no artifacts matching {args.query!r} in {client.location}")
+        print(f"no artifacts matching {args.query!r} in {_printable(client.location)}")
         return 1
     for ref, latest, meta in hits:
         tier = meta.get("trust_tier", "?")
-        print(f"{ref}@{latest}  [{tier}]  {meta.get('name', '')}")
+        print(f"{_printable(ref)}@{_printable(latest)}  [{_printable(tier)}]  {_printable(meta.get('name') or '')}")
         if meta.get("description"):
-            print(f"    {meta['description']}")
+            print(f"    {_printable(meta['description'])}")
     return 0
 
 
@@ -111,7 +139,7 @@ def _cmd_namespaces(args: argparse.Namespace) -> int:
     ns_registry = client.namespace_registry()
     for name in sorted(ns_registry.names):
         keys = ", ".join(sorted(ns_registry.publisher_keys(name)))
-        print(f"{name}  keys: {keys}")
+        print(f"{_printable(name)}  keys: {_printable(keys)}")
     print(f"{len(ns_registry.names)} registered namespace(s); registration: GOVERNANCE.md in the vcp-hub repo")
     return 0
 
@@ -121,7 +149,7 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     for label in report.checked:
         print(f"ok {label}")
     for problem in report.problems:
-        print(f"FAIL {problem}", file=sys.stderr)
+        print(f"FAIL {_printable(problem, keep_newlines=True)}", file=sys.stderr)
     print(f"{len(report.checked)} passed, {len(report.problems)} failed")
     return 0 if report.ok else 1
 
@@ -130,7 +158,7 @@ def _cmd_build_index(args: argparse.Namespace) -> int:
     report = write_index(args.hub_root)
     print(f"index.json written from {len(report.checked)} entries")
     for problem in report.problems:
-        print(f"SKIPPED (lint failure): {problem}", file=sys.stderr)
+        print(f"SKIPPED (lint failure): {_printable(problem, keep_newlines=True)}", file=sys.stderr)
     return 0 if report.ok else 1
 
 
@@ -138,7 +166,13 @@ def _cmd_publish(args: argparse.Namespace) -> int:
     base_entry = None
     if args.base_entry:
         base_entry = _read_base_entry(args.base_entry)
-    ref = publish(args.artifact, args.hub, namespace=args.namespace, base_entry=base_entry)
+    ref = publish(
+        args.artifact,
+        args.hub,
+        namespace=args.namespace,
+        base_entry=base_entry,
+        signature_path=args.signature,
+    )
     print(f"published {ref} into {args.hub} (open a PR to the vcp-hub repo to release)")
     return 0
 
@@ -192,6 +226,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--hub", required=True)
     p.add_argument("--namespace", default="creed-space")
     p.add_argument("--base-entry", default=None, help="existing compiled registry entry to extend")
+    p.add_argument(
+        "--signature",
+        default=None,
+        help="ref-bound publisher sidecar (default: <artifact>.ed25519.sig beside the artifact)",
+    )
     p.set_defaults(func=_cmd_publish)
 
     # Protocol operations (token/lite/encode/classify/status) — same shaping
@@ -202,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except (HubError, ProtocolError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        print(f"ERROR: {_printable(exc, keep_newlines=True)}", file=sys.stderr)
         return 1
 
 

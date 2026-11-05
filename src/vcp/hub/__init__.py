@@ -14,12 +14,14 @@ counter-signature) is the semantic gate and is not yet issued.
 
 from .errors import HubError, VerificationError
 from .keys import PINNED_PUBLISHER_KEYS
-from .verify import VerifiedArtifact, verify_artifact_bytes
+from .verify import ARTIFACT_SIG_VERSION, VerifiedArtifact, artifact_message_context, verify_artifact_bytes
 
 __all__ = [
     "HubError",
     "VerificationError",
     "PINNED_PUBLISHER_KEYS",
+    "ARTIFACT_SIG_VERSION",
     "VerifiedArtifact",
+    "artifact_message_context",
     "verify_artifact_bytes",
 ]

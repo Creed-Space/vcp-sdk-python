@@ -144,6 +144,7 @@ def _lint_version_dir(
         _read_bounded(sig_path, MAX_SIGNATURE_SIDECAR_BYTES, f"signature sidecar {sig_path.name}"),
         expected_sha256=entry["content_sha256"],
         publisher_keys=ns_registry.publisher_keys(namespace),
+        ref=f"{namespace}/{artifact_id}@{version}",
     )
 
     # `verified` tier: only a domain-separated, ref-bound ROOT counter-signature
@@ -299,8 +300,25 @@ def build_index(hub_root: str | Path) -> tuple[dict[str, Any], LintReport]:
         # ceremony. Clients keep a high-water mark and refuse lower sequences.
         "sequence": _existing_sequence(root),
         "artifacts": artifacts,
+        # Signed freshness stamps are likewise set ONLY by the release
+        # ceremony; a rebuild carries them over, never invents them, so
+        # `vcp build-index` reproduces the committed index byte for byte.
+        **_existing_freshness(root),
     }
     return index, report
+
+
+def _existing_freshness(root: Path) -> dict[str, str]:
+    index_path = root / "index.json"
+    if not index_path.is_file():
+        return {}
+    try:
+        existing = loads_strict(_read_bounded(index_path, MAX_FETCH_BYTES, "index.json").decode("utf-8"))
+    except (HubError, UnicodeDecodeError, ValueError, RecursionError):
+        return {}
+    if not isinstance(existing, dict):
+        return {}
+    return {k: existing[k] for k in ("issued_at", "expires_at") if isinstance(existing.get(k), str)}
 
 
 def _existing_sequence(root: Path) -> int:

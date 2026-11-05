@@ -113,7 +113,7 @@ def build_community_hub(
         COMMUNITY_ID,
         "1.0.0",
         content,
-        make_sidecar(content, community_key, key_id=COMMUNITY_KEY_ID),
+        make_sidecar(content, community_key, key_id=COMMUNITY_KEY_ID, ref=f"{COMMUNITY_REF}@1.0.0"),
         build_entry_dict(COMMUNITY_ID, "1.0.0", content, key_id=COMMUNITY_KEY_ID, namespace=COMMUNITY_NS),
         namespace=COMMUNITY_NS,
     )
@@ -292,7 +292,8 @@ def test_countersignature_replayed_at_another_version_is_a_lint_problem(tmp_path
     for version in ("1.0.0", "2.0.0"):
         entry = build_entry_dict(vid, version, content)
         entry["trust_tier"] = "verified"
-        vdir = write_version_dir(hub, vid, version, content, make_sidecar(content, test_private_key), entry)
+        sig = make_sidecar(content, test_private_key, ref=f"{FOUNDER_NAMESPACE}/{vid}@{version}")
+        vdir = write_version_dir(hub, vid, version, content, sig, entry)
         (vdir / f"{vid}.md.ed25519.countersig").write_bytes(countersig_v1)  # replayed at 2.0.0
 
     report = lint_hub_tree(hub, require_signed_index=False)

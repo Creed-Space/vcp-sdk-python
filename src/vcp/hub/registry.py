@@ -15,10 +15,12 @@ and version is validated against a strict regex before it touches a path or URL.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +71,83 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
+# Signed freshness (F45): the release ceremony stamps ``issued_at`` (and may
+# stamp ``expires_at``) into index.json before root-signing it. A client
+# refuses an index older than its max age, so a validly-signed index captured
+# before a revocation cannot be replayed indefinitely to a client that never
+# saw the newer sequence. The ceremony must re-sign at least this often.
+DEFAULT_MAX_INDEX_AGE = timedelta(days=30)
+MAX_INDEX_CLOCK_SKEW = timedelta(hours=1)
+
+# Transition grace path: the index shipped before freshness existed carries no
+# ``issued_at``. It is accepted ONLY as these exact bytes (sha256 of
+# vcp-hub/index.json, sequence 2); any other undated index is refused, so the
+# grace path cannot be extended by signing another undated document. Once the
+# index is re-signed with ``issued_at`` at a higher sequence, clients that see
+# it refuse this one by sequence; empty this set at that point.
+LEGACY_UNDATED_INDEX_PINS: frozenset[str] = frozenset(
+    {"00bf6e458cb73bc1c4bac53ef53273971c2219723f709a10cb7360648d3d09e5"}
+)
+
+
+# == timezone.utc, spelled out: vcp-sdk supports Python 3.10 (no datetime.UTC).
+_UTC = timezone(timedelta(0))
+
+
+def _utcnow() -> datetime:
+    return datetime.now(_UTC)
+
+
+def _parse_signed_time(index: dict[str, Any], field: str) -> datetime:
+    raw = index.get(field)
+    if not isinstance(raw, str):
+        raise VerificationError(f"registry index {field} must be an ISO-8601 UTC timestamp, got {raw!r}")
+    try:
+        # 3.10's fromisoformat does not accept a trailing "Z".
+        when = datetime.fromisoformat(raw[:-1] + "+00:00" if raw.endswith("Z") else raw)
+    except ValueError as exc:
+        raise VerificationError(f"registry index {field} {raw!r} is not an ISO-8601 timestamp") from exc
+    if when.tzinfo is None:
+        raise VerificationError(f"registry index {field} {raw!r} has no timezone; refusing")
+    return when
+
+
+def check_index_freshness(
+    index: dict[str, Any],
+    index_bytes: bytes,
+    max_age: timedelta = DEFAULT_MAX_INDEX_AGE,
+    now: datetime | None = None,
+) -> None:
+    """Refuse a root-signed index that is too old to vouch for current state.
+
+    Call only AFTER the signature verified: ``issued_at``/``expires_at`` are
+    trusted because they are covered by the root signature. Raises
+    :class:`VerificationError` on a stale, expired, future-dated, or undated
+    index (except the pinned pre-freshness index; see LEGACY_UNDATED_INDEX_PINS).
+    """
+    if "issued_at" not in index and "expires_at" not in index:
+        if hashlib.sha256(index_bytes).hexdigest() in LEGACY_UNDATED_INDEX_PINS:
+            return
+        raise VerificationError(
+            "registry index carries no signed issued_at; an undated index could be a replay of retired state, refusing"
+        )
+    now = now if now is not None else _utcnow()
+    issued_at = _parse_signed_time(index, "issued_at")
+    if issued_at > now + MAX_INDEX_CLOCK_SKEW:
+        raise VerificationError(f"registry index issued_at {issued_at.isoformat()} is in the future; refusing")
+    if now - issued_at > max_age:
+        raise VerificationError(
+            f"registry index is STALE: issued {issued_at.isoformat()}, older than the "
+            f"maximum age ({max_age}); a validly-signed but old index may hide revocations, refusing"
+        )
+    if "expires_at" in index:
+        expires_at = _parse_signed_time(index, "expires_at")
+        if expires_at <= issued_at:
+            raise VerificationError("registry index expires_at is not after issued_at; refusing")
+        if now >= expires_at:
+            raise VerificationError(f"registry index EXPIRED at {expires_at.isoformat()}; refusing")
+
+
 def validate_ref(ref: str) -> tuple[str, str, str | None]:
     """Parse and validate ``namespace/id[@version]``. Raises HubError."""
     if not isinstance(ref, str) or not ref:
@@ -106,7 +185,10 @@ def validate_artifact_filename(filename: str) -> str:
 class RegistryClient:
     """Read-only client for a Creed Commons registry (file:// or allowlisted https://)."""
 
-    def __init__(self, base: str = DEFAULT_REGISTRY_URL):
+    def __init__(self, base: str = DEFAULT_REGISTRY_URL, max_index_age: timedelta = DEFAULT_MAX_INDEX_AGE):
+        if not isinstance(max_index_age, timedelta) or max_index_age <= timedelta(0):
+            raise HubError(f"max_index_age must be a positive timedelta, got {max_index_age!r}")
+        self._max_index_age = max_index_age
         self._base_path: Path | None = None
         self._base_url: str | None = None
 
@@ -228,6 +310,7 @@ class RegistryClient:
             raise HubError("registry index.json has an unsupported format")
         if type(index.get("sequence")) is not int or index["sequence"] < 1:
             raise VerificationError("registry index has no valid monotonic sequence")
+        check_index_freshness(index, index_bytes, max_age=self._max_index_age)
         if not isinstance(index.get("artifacts"), dict):
             raise HubError("registry index.json has no artifacts map")
         if len(index["artifacts"]) > MAX_INDEX_ARTIFACTS:

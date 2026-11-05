@@ -23,10 +23,10 @@ def signed_artifact(tmp_path, test_private_key, pinned_test_key):
     source.mkdir()
     md_path = source / f"{ARTIFACT_ID}.md"
 
-    def _write(text: str) -> Path:
+    def _write(text: str, ref: str = REF) -> Path:
         content = text.encode("utf-8")
         md_path.write_bytes(content)
-        md_path.with_suffix(".md.ed25519.sig").write_bytes(make_sidecar(content, test_private_key))
+        md_path.with_suffix(".md.ed25519.sig").write_bytes(make_sidecar(content, test_private_key, ref=ref))
         return md_path
 
     _write(artifact_text(ARTIFACT_ID))

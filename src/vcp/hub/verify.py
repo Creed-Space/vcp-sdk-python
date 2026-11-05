@@ -29,16 +29,40 @@ MAX_SIGNATURE_SIDECAR_BYTES = 64 * 1024
 MAX_KEY_ID_LENGTH = 128
 MAX_SIGNED_AT_LENGTH = 128
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-_COUNTERSIGN_REF_RE = re.compile(r"[a-z][a-z0-9-]{0,63}/[a-z][a-z0-9_]{0,63}@[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}\Z")
+# Canonical namespace/id@MAJOR.MINOR.PATCH (mirrors NAMESPACE_RE / ARTIFACT_ID_RE /
+# VERSION_RE in registry.py, which cannot be imported here without a cycle).
+# Every ref that enters a signed message must fullmatch this.
+_REF_RE = re.compile(r"[a-z][a-z0-9-]{0,63}/[a-z][a-z0-9_]{0,63}@[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}\Z")
+# Artifact publisher sidecars: v2 signs ARTIFACT_CONTEXT || ref || NUL || content
+# and names the ref it is bound to; v1 (legacy) signed raw content only.
+ARTIFACT_SIG_VERSION = 2
+LEGACY_ARTIFACT_SIG_VERSION = 1
 
 
-# Domain separation: each non-artifact document type signs CONTEXT || payload,
-# never raw content, so no signature of one kind can be replayed as another.
-# Artifact publisher signatures sign raw content (context b"") — the historical
-# format already shipped on published artifacts.
+# Domain separation: every document type signs CONTEXT || payload, never raw
+# content, so no signature of one kind can be replayed as another. Artifact
+# and counter-signature contexts are additionally bound to namespace/id@version.
+# The one exception is the pinned legacy v1 artifact set below.
 COUNTERSIGN_CONTEXT = b"creed-commons-verified-tier-v1\x00"
 NS_REGISTRY_CONTEXT = b"creed-commons-namespace-registry-v1\x00"
 INDEX_CONTEXT = b"creed-commons-index-v1\x00"
+ARTIFACT_CONTEXT = b"creed-commons-artifact-v2\x00"
+
+# Grandfathered v1 (content-only, unbound) publisher signatures: the artifacts
+# shipped in vcp-hub before ref-bound signing existed, pinned by exact ref AND
+# content hash. A v1 sidecar verifies ONLY for these pairs, so already-signed
+# bytes can never be republished under another namespace/id/version, and no
+# other root-signed message (index, registry, counter-signature) can pose as an
+# artifact. Empty this map once the shipped artifacts are re-signed as v2.
+LEGACY_UNBOUND_ARTIFACT_PINS: dict[str, str] = {
+    "creed-space/accountability_amendment_risk_checks@1.0.0": (
+        "c2d890e9cc95f2c0efa58562e1e632ec962bc143100a27f5ea8ee8c7d4d8186d"
+    ),
+    "creed-space/anti_gaslighting@1.0.0": "6c42db09b29417b18cc299ba6f7279f7e1ef781992a8a27067153240f8478df5",
+    "creed-space/no_undue_influence@1.0.0": "da8acb3cd6a9e77797cbde1569bb537daebe59e2a2b3a5dcc84f8dbdf6e5fdeb",
+    "creed-space/pseudonymity_protection@1.0.0": "d4895a48928602ab019ef17faa3ddbe04081085080942085e549c3b1f3de16a3",
+    "creed-space/uef@1.0.0": "11de95ff8df417474551904b3e18066cdff5eab6bc3465eb14e41800e9f15a78",
+}
 
 
 @dataclass(frozen=True)
@@ -88,7 +112,10 @@ def _load_public_key(key_id: str, publisher_keys: dict[str, str] | None = None):
     return key, pem
 
 
-def parse_signature_sidecar(sig_bytes: bytes) -> dict[str, Any]:
+def parse_signature_sidecar(
+    sig_bytes: bytes,
+    allowed_versions: frozenset[int] = frozenset({SUPPORTED_SIG_VERSION}),
+) -> dict[str, Any]:
     """Parse and structurally validate a ``.ed25519.sig`` JSON sidecar."""
     if not isinstance(sig_bytes, bytes):
         raise VerificationError("signature sidecar must be bytes")
@@ -100,7 +127,8 @@ def parse_signature_sidecar(sig_bytes: bytes) -> dict[str, Any]:
         raise VerificationError(f"signature sidecar is not valid JSON: {exc}") from exc
     if not isinstance(sig_data, dict):
         raise VerificationError("signature sidecar must be a JSON object")
-    if type(sig_data.get("version")) is not int or sig_data["version"] != SUPPORTED_SIG_VERSION:
+    version = sig_data.get("version")
+    if type(version) is not int or version not in allowed_versions:
         raise VerificationError(f"unsupported signature sidecar version {sig_data.get('version')!r}")
     if sig_data.get("algorithm") != SUPPORTED_ALGORITHM:
         raise VerificationError(
@@ -121,11 +149,30 @@ def parse_signature_sidecar(sig_bytes: bytes) -> dict[str, Any]:
     return sig_data
 
 
+def _ref_bytes(ref: str) -> bytes:
+    """Validate ``namespace/id@version`` before it enters a signed message."""
+    if not isinstance(ref, str) or _REF_RE.fullmatch(ref) is None:
+        raise VerificationError(f"invalid artifact ref {ref!r} for a signed message (expected namespace/id@version)")
+    return ref.encode("ascii")
+
+
+def artifact_message_context(ref: str) -> bytes:
+    """The domain-separation prefix a v2 publisher signature signs for ``ref``.
+
+    The publisher signs ``ARTIFACT_CONTEXT + ref + NUL + content``, so the
+    signature binds the bytes to exactly one ``namespace/id@version`` and is
+    never valid for an index, namespace registry, or counter-signature message.
+    """
+    return ARTIFACT_CONTEXT + _ref_bytes(ref) + b"\x00"
+
+
 def verify_artifact_bytes(
     content: bytes,
     sig_bytes: bytes | None,
     expected_sha256: str | None = None,
     publisher_keys: dict[str, str] | None = None,
+    *,
+    ref: str,
 ) -> VerifiedArtifact:
     """Verify artifact ``content`` against its signature sidecar and expected hash.
 
@@ -140,6 +187,10 @@ def verify_artifact_bytes(
             ``None`` verifies against the pinned root allowlist. Counter
             signatures for the ``verified`` tier are always checked with
             ``None`` — only the root issues that tier.
+        ref: The ``namespace/id@version`` this content is being accepted as.
+            A v2 sidecar must be bound to exactly this ref; a legacy v1
+            (content-only) sidecar is accepted only for a grandfathered
+            ``(ref, sha256)`` pair in ``LEGACY_UNBOUND_ARTIFACT_PINS``.
 
     Returns:
         VerifiedArtifact on success.
@@ -156,7 +207,10 @@ def verify_artifact_bytes(
     ):
         raise VerificationError("expected sha256 must be 64 lowercase hexadecimal characters")
 
-    sig_data = parse_signature_sidecar(sig_bytes)
+    ref_prefix = artifact_message_context(ref)
+    sig_data = parse_signature_sidecar(
+        sig_bytes, allowed_versions=frozenset({ARTIFACT_SIG_VERSION, LEGACY_ARTIFACT_SIG_VERSION})
+    )
 
     content_sha256 = hashlib.sha256(content).hexdigest()
     if sig_data["content_hash"] != content_sha256:
@@ -170,6 +224,24 @@ def verify_artifact_bytes(
             f"content hash mismatch: expected {expected_sha256[:12]}… "
             f"(registry entry / lockfile), artifact bytes hash to {content_sha256[:12]}…"
         )
+
+    if sig_data["version"] == ARTIFACT_SIG_VERSION:
+        if sig_data.get("ref") != ref:
+            raise VerificationError(
+                f"signature is bound to {sig_data.get('ref')!r}, not {ref!r}; a publisher "
+                "signature is valid only for the namespace/id@version it was made for"
+            )
+        message = ref_prefix + content
+    else:
+        # Legacy v1 signed raw bytes with no ref: honour it only for the exact
+        # artifacts shipped before ref binding, never for new refs or content.
+        if LEGACY_UNBOUND_ARTIFACT_PINS.get(ref) != content_sha256:
+            raise VerificationError(
+                f"legacy content-only (v1) signature is not accepted for {ref}: it does not "
+                "bind namespace/id@version, so it is honoured only for the pinned artifacts "
+                f"shipped before ref binding; re-sign as a v{ARTIFACT_SIG_VERSION} sidecar"
+            )
+        message = content
 
     key_id = sig_data["key_id"]
     public_key, public_key_pem = _load_public_key(key_id, publisher_keys)
@@ -188,7 +260,7 @@ def verify_artifact_bytes(
             "the 'cryptography' package is unavailable; refusing (install this checkout with the [hub] extra)"
         ) from exc
     try:
-        public_key.verify(signature, content)
+        public_key.verify(signature, message)
     except InvalidSignature as exc:
         raise VerificationError(f"Ed25519 signature verification FAILED for key {key_id!r}") from exc
 
@@ -269,7 +341,7 @@ def countersign_message_context(ref: str) -> bytes:
     counter-signature cannot be replayed onto the same bytes republished under
     a different namespace, id, or version.
     """
-    if not isinstance(ref, str) or _COUNTERSIGN_REF_RE.fullmatch(ref) is None:
+    if not isinstance(ref, str) or _REF_RE.fullmatch(ref) is None:
         raise VerificationError("counter-signature ref must be canonical namespace/id@MAJOR.MINOR.PATCH")
     return COUNTERSIGN_CONTEXT + ref.encode("ascii") + b"\x00"
 

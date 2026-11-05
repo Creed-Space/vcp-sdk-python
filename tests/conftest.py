@@ -8,9 +8,11 @@ the injection is visible to it and is undone automatically after each test.
 
 Never mutate ``PINNED_PUBLISHER_KEYS`` without monkeypatch.
 
-Three signature shapes exist and are NOT interchangeable (that is the point):
+Signature shapes are NOT interchangeable (that is the point):
 
-- artifact sidecars sign RAW content (``make_sidecar``);
+- artifact sidecars (v2) sign ``ARTIFACT_CONTEXT + ref + NUL + content`` and name
+  their ref (``make_sidecar(..., ref=...)``); without ``ref`` the helper emits a
+  legacy v1 raw-content sidecar, which verifies only for pinned legacy artifacts;
 - trust documents — the namespace registry and index.json — sign
   ``CONTEXT + content`` (``make_detached_sidecar``);
 - ``verified``-tier counter-signatures sign ``CONTEXT + ref + NUL + content``
@@ -25,6 +27,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -34,9 +37,17 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from vcp.hub.keys import PINNED_PUBLISHER_KEYS
 from vcp.hub.lint import write_index
 from vcp.hub.namespace_registry import REGISTRY_FILENAME, REGISTRY_VERSION
-from vcp.hub.verify import INDEX_CONTEXT, countersign_message_context
+from vcp.hub.verify import (
+    ARTIFACT_SIG_VERSION,
+    INDEX_CONTEXT,
+    LEGACY_ARTIFACT_SIG_VERSION,
+    artifact_message_context,
+    countersign_message_context,
+)
 
 TEST_KEY_ID = "test-signer"
+# Default ref for unit-level verify tests that sign one artifact in isolation.
+TEST_REF = "creed-space/test_artifact@1.0.0"
 FIXED_SIGNED_AT = "2026-07-10T00:00:00+00:00"
 
 INDEX_FILENAME = "index.json"
@@ -66,12 +77,21 @@ def make_sidecar(
     *,
     content_hash: str | None = None,
     algorithm: str = "Ed25519",
-    version: int = 1,
+    version: int | None = None,
     signature_b64: str | None = None,
+    ref: str | None = None,
 ) -> bytes:
-    """Build a ``.ed25519.sig`` sidecar. Overrides exist for negative tests."""
+    """Build a ``.ed25519.sig`` sidecar. Overrides exist for negative tests.
+
+    With ``ref`` this is a v2 artifact sidecar bound to that
+    ``namespace/id@version``; without it, a v1 raw-content sidecar (the legacy
+    artifact shape, and the base that ``make_detached_sidecar`` overrides).
+    """
+    message = content if ref is None else artifact_message_context(ref) + content
     if signature_b64 is None:
-        signature_b64 = base64.b64encode(private_key.sign(content)).decode("ascii")
+        signature_b64 = base64.b64encode(private_key.sign(message)).decode("ascii")
+    if version is None:
+        version = LEGACY_ARTIFACT_SIG_VERSION if ref is None else ARTIFACT_SIG_VERSION
     sidecar = {
         "version": version,
         "algorithm": algorithm,
@@ -80,6 +100,8 @@ def make_sidecar(
         "signed_at": FIXED_SIGNED_AT,
         "signature": signature_b64,
     }
+    if ref is not None:
+        sidecar["ref"] = ref
     return json.dumps(sidecar, indent=2, sort_keys=True).encode("utf-8")
 
 
@@ -156,15 +178,35 @@ def write_namespace_registry(hub_root: Path, registry_bytes: bytes, sig_bytes: b
         sig_path.unlink()
 
 
-def sign_index(hub_root: Path, private_key: Ed25519PrivateKey, key_id: str = TEST_KEY_ID) -> None:
-    """Root-sign ``index.json`` exactly as it sits on disk (the release ceremony).
+_STAMP_NOW = object()
+# == timezone.utc, spelled out: vcp-sdk supports Python 3.10 (no datetime.UTC).
+UTC = timezone(timedelta(0))
+
+
+def sign_index(
+    hub_root: Path,
+    private_key: Ed25519PrivateKey,
+    key_id: str = TEST_KEY_ID,
+    *,
+    issued_at: str | None | object = _STAMP_NOW,
+) -> None:
+    """Root-sign ``index.json`` (the release ceremony).
 
     ``write_index`` only WRITES the index; signing it is a separate, root-held step.
     Clients refuse an unsigned or tampered index, so every tree that install or a
     strict lint touches must be signed here — and RE-signed after any later edit to
     index.json, or the sidecar's hash check will (correctly) reject it.
+
+    Like the real ceremony, this first stamps the signed freshness field
+    ``issued_at`` (default: now; pass a timestamp string to back-date it, or
+    ``None`` to sign the bytes on disk unchanged, e.g. an undated index).
     """
     root = Path(hub_root)
+    if issued_at is not None:
+        stamp = datetime.now(UTC).isoformat() if issued_at is _STAMP_NOW else issued_at
+        index = json.loads((root / INDEX_FILENAME).read_text(encoding="utf-8"))
+        index["issued_at"] = stamp
+        (root / INDEX_FILENAME).write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     index_bytes = (root / INDEX_FILENAME).read_bytes()
     sidecar = make_detached_sidecar(index_bytes, private_key, INDEX_CONTEXT, key_id=key_id)
     (root / (INDEX_FILENAME + ".ed25519.sig")).write_bytes(sidecar)
@@ -193,18 +235,20 @@ def pinned_test_key(monkeypatch, test_private_key) -> str:
 
 @pytest.fixture
 def sign_artifact(test_private_key):
-    """``sign_artifact(content, key_id=..., private_key=...) -> sidecar bytes``."""
+    """``sign_artifact(content, key_id=..., private_key=..., ref=TEST_REF) -> sidecar bytes``."""
 
     def _sign(
         content: bytes,
         key_id: str = TEST_KEY_ID,
         private_key: Ed25519PrivateKey | None = None,
+        ref: str | None = TEST_REF,
         **overrides,
     ) -> bytes:
         return make_sidecar(
             content,
             private_key if private_key is not None else test_private_key,
             key_id=key_id,
+            ref=ref,
             **overrides,
         )
 
@@ -277,7 +321,7 @@ def make_hub(tmp_path, test_private_key, pinned_test_key):
         hub_root = Path(root) if root is not None else tmp_path / "hub"
         hub_root.mkdir(parents=True, exist_ok=True)
         body = content if content is not None else artifact_text(artifact_id, version).encode("utf-8")
-        sig_bytes = make_sidecar(body, test_private_key)
+        sig_bytes = make_sidecar(body, test_private_key, ref=f"creed-space/{artifact_id}@{version}")
         entry = build_entry_dict(artifact_id, version, body)
         write_version_dir(hub_root, artifact_id, version, body, sig_bytes, entry)
         report = write_index(hub_root)
