@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    TEST_REF,
     artifact_text,
     build_entry_dict,
     make_detached_sidecar,
@@ -47,7 +48,9 @@ def _write_signed_source(root: Path, artifact_id: str, private_key, *, extra_fro
     text = f"---\nid: {artifact_id}\nversion: 1.0.0\ntitle: T\n{extra_frontmatter}---\nbody\n"
     content = text.encode("utf-8")
     path.write_bytes(content)
-    path.with_suffix(".md.ed25519.sig").write_bytes(make_sidecar(content, private_key))
+    path.with_suffix(".md.ed25519.sig").write_bytes(
+        make_sidecar(content, private_key, ref=f"creed-space/{artifact_id}@1.0.0")
+    )
     return path
 
 
@@ -288,7 +291,7 @@ def test_signature_sidecar_rejects_ambiguous_or_resource_hostile_shapes(sidecar,
 def test_signature_verifier_rejects_malformed_expected_hash(pinned_test_key, sign_artifact):
     content = b"content"
     with pytest.raises(VerificationError, match="expected sha256"):
-        verify_artifact_bytes(content, sign_artifact(content), expected_sha256="short")
+        verify_artifact_bytes(content, sign_artifact(content), expected_sha256="short", ref=TEST_REF)
 
 
 def test_signature_verifier_wraps_non_ascii_registered_pem_as_verification_error(
@@ -296,7 +299,7 @@ def test_signature_verifier_wraps_non_ascii_registered_pem_as_verification_error
 ):
     content = b"content"
     with pytest.raises(VerificationError, match="failed to load"):
-        verify_artifact_bytes(content, sign_artifact(content), publisher_keys={"test-signer": "\u2603"})
+        verify_artifact_bytes(content, sign_artifact(content), publisher_keys={"test-signer": "\u2603"}, ref=TEST_REF)
 
 
 @pytest.mark.parametrize("ref", [None, "", "creed-space/item@1.0.0\n", "creed-space/item", "bad/ref@1.0"])
@@ -438,7 +441,7 @@ def test_concurrent_installs_preserve_every_pin(make_hub, tmp_path, test_private
             artifact_id,
             "1.0.0",
             content,
-            make_sidecar(content, test_private_key),
+            make_sidecar(content, test_private_key, ref=f"creed-space/{artifact_id}@1.0.0"),
             build_entry_dict(artifact_id, "1.0.0", content),
         )
     assert write_index(hub).ok

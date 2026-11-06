@@ -179,11 +179,20 @@ def _updated_lock(
         "artifact": artifact_name,
         "trust_tier": trust_tier,
     }
-    registries = updated.setdefault("registries", {})
-    seen = registries.setdefault(registry.location, {})
+    _record_sequences(updated, registry, index, namespace_sequence)
+    return updated
+
+
+def _record_sequences(
+    lock: dict[str, Any],
+    registry: RegistryClient,
+    index: dict[str, Any],
+    namespace_sequence: int,
+) -> None:
+    """Raise the lock's anti-rollback high-water marks in place (never lowered)."""
+    seen = lock.setdefault("registries", {}).setdefault(registry.location, {})
     seen["index_sequence"] = max(seen.get("index_sequence", 0), index["sequence"])
     seen["namespace_sequence"] = max(seen.get("namespace_sequence", 0), namespace_sequence)
-    return updated
 
 
 def _commit_install(
@@ -215,6 +224,18 @@ def _commit_install(
         with _lockfile_mutex(lock_file):
             _check_sequences(registry, index, ns_registry, target, lock_file)
             lock = _load_lock(lock_file)
+            # Published versions are immutable: a registry that now serves
+            # DIFFERENT bytes for a version this lock already pinned has
+            # repointed it. Refuse before the tree or the lock is touched
+            # rather than silently re-pinning.
+            prior = lock["artifacts"].get(f"{namespace}/{artifact_id}")
+            if prior is not None and prior.get("version") == version:
+                if prior.get("content_sha256") != verified.content_sha256:
+                    raise VerificationError(
+                        f"{namespace}/{artifact_id}@{version} is pinned in {lock_file.name} to "
+                        f"{str(prior.get('content_sha256'))[:12]}… but the registry now serves "
+                        f"{verified.content_sha256[:12]}…; published versions are immutable, refusing"
+                    )
             updated = _updated_lock(
                 lock,
                 namespace=namespace,
@@ -352,6 +373,7 @@ def install(
         sig_bytes,
         expected_sha256=entry["content_sha256"],
         publisher_keys=publisher_keys,
+        ref=f"{namespace}/{artifact_id}@{version}",
     )
 
     # The `verified` tier is issued ONLY by a domain-separated ROOT
@@ -425,6 +447,14 @@ def verify_tree(
     outside its threat model. Pass ``registry`` to additionally re-check every
     pin against the LIVE root-signed index (hash + trust tier + revocations),
     which that attacker cannot forge.
+
+    With ``registry``, verify also RAISES the lock's anti-rollback high-water
+    marks to the sequences it just accepted (rewriting vcp.lock atomically),
+    before checking any artifact: once a client has seen a revocation it can
+    never be shown an older index again, even if this verify fails. The
+    registry client also refuses an index older than its max age (signed
+    ``issued_at``), which bounds replay to a client that never saw the newer
+    sequence.
     """
     target = Path(target_dir).resolve()
     lock_file = Path(lock_path) if lock_path else target / LOCKFILE_NAME
@@ -436,7 +466,15 @@ def verify_tree(
     if registry is not None:
         live_namespace_registry = registry.namespace_registry()
         live_index = registry.index()
-        _check_sequences(registry, live_index, live_namespace_registry, target, lock_file)
+        try:
+            with _lockfile_mutex(lock_file):
+                _check_sequences(registry, live_index, live_namespace_registry, target, lock_file)
+                # Re-read under the mutex so a concurrent install's pin is kept.
+                lock = _load_lock(lock_file)
+                _record_sequences(lock, registry, live_index, live_namespace_registry.sequence)
+                _write_lock_atomically(lock_file, lock)
+        except OSError as exc:
+            raise HubError(f"cannot record anti-rollback high-water marks in {lock_file}: {exc}") from exc
 
     verified_refs: list[str] = []
     problems: list[str] = []
@@ -466,6 +504,7 @@ def verify_tree(
                 ),
                 expected_sha256=pin["content_sha256"],
                 publisher_keys=locked_keys,
+                ref=f"{ref}@{pin['version']}",
             )
             if verified.key_id != pin["key_id"]:
                 raise VerificationError(

@@ -191,12 +191,17 @@ def _frontmatter(md_path: Path) -> dict[str, Any]:
     return _frontmatter_from_bytes(_read_bounded(md_path, MAX_FETCH_BYTES, md_path.name), md_path.name)
 
 
+def _default_sig_path(artifact_path: Path) -> Path:
+    return artifact_path.with_suffix(artifact_path.suffix + ".ed25519.sig")
+
+
 def build_entry(
     artifact_path: Path,
     namespace: str = "creed-space",
     base_entry: dict[str, Any] | None = None,
     publisher_keys: dict[str, str] | None = None,
     known_namespaces: set[str] | None = None,
+    signature_path: Path | None = None,
 ) -> dict[str, Any]:
     """Build a distribution registry entry for a signed artifact.
 
@@ -204,6 +209,8 @@ def build_entry(
     otherwise a minimal entry is derived from the artifact's frontmatter.
     ``publisher_keys`` scopes signature trust to the namespace's registered keys
     (``None`` = pinned root, correct for the founder namespace).
+    ``signature_path`` names the publisher sidecar when it does not sit beside
+    the artifact as ``<artifact>.ed25519.sig``.
     """
     if not isinstance(base_entry, (dict, type(None))):
         raise HubError("base_entry must be an object")
@@ -211,14 +218,13 @@ def build_entry(
         validate_artifact_filename(artifact_path.name)
     except HubError as exc:
         raise HubError(f"invalid source artifact name: {exc}") from exc
-    sig_path = artifact_path.with_suffix(artifact_path.suffix + ".ed25519.sig")
+    sig_path = Path(signature_path) if signature_path else _default_sig_path(artifact_path)
     if not sig_path.is_file():
         raise VerificationError(
             f"{artifact_path.name}: no .ed25519.sig sidecar; unsigned artifacts are never published"
         )
     content = _read_bounded(artifact_path, MAX_FETCH_BYTES, artifact_path.name)
     signature = _read_bounded(sig_path, MAX_SIGNATURE_SIDECAR_BYTES, sig_path.name)
-    verified = verify_artifact_bytes(content, signature, publisher_keys=publisher_keys)
 
     entry: dict[str, Any] = dict(base_entry) if base_entry else {}
     fm = _frontmatter(artifact_path)
@@ -229,6 +235,11 @@ def build_entry(
     version = entry.get("version") or fm.get("version")
     if not isinstance(version, str) or VERSION_RE.fullmatch(version) is None:
         raise HubError(f"{artifact_path.name}: no valid MAJOR.MINOR.PATCH version (got {version!r})")
+
+    # The publisher signature must be bound to the exact ref being published.
+    ref = f"{namespace}/{artifact_id}@{version}"
+    validate_ref(ref)
+    verified = verify_artifact_bytes(content, signature, publisher_keys=publisher_keys, ref=ref)
 
     entry.setdefault("id", artifact_id)
     entry["version"] = version
@@ -266,13 +277,19 @@ def publish(
     hub_root: str | Path,
     namespace: str = "creed-space",
     base_entry: dict[str, Any] | None = None,
+    signature_path: str | Path | None = None,
 ) -> str:
     """Publish a signed artifact into ``hub_root`` and regenerate the index.
+
+    ``signature_path`` overrides the default ``<artifact>.ed25519.sig`` sidecar
+    location (e.g. a ref-bound sidecar produced by a separate signing step);
+    the hub always stores it as ``<artifact>.ed25519.sig``.
 
     Returns the published ref ``namespace/id@version``.
     """
     artifact_path = Path(artifact_path)
     root = Path(hub_root).resolve()
+    sig_path = Path(signature_path) if signature_path else _default_sig_path(artifact_path)
     # The hub's own root-verified namespace registry decides who may publish
     # where; the publisher's signature must verify against the keys registered
     # for the TARGET namespace (no cross-namespace signing).
@@ -283,9 +300,10 @@ def publish(
         base_entry=base_entry,
         publisher_keys=ns_registry.publisher_keys(namespace),
         known_namespaces=ns_registry.names,
+        signature_path=sig_path,
     )
 
-    sig_path = artifact_path.with_suffix(artifact_path.suffix + ".ed25519.sig")
+    ref = f"{namespace}/{entry['id']}@{entry['version']}"
     content = _read_bounded(artifact_path, MAX_FETCH_BYTES, artifact_path.name)
     signature = _read_bounded(sig_path, MAX_SIGNATURE_SIDECAR_BYTES, sig_path.name)
     verify_artifact_bytes(
@@ -293,12 +311,13 @@ def publish(
         signature,
         expected_sha256=entry["content_sha256"],
         publisher_keys=ns_registry.publisher_keys(namespace),
+        ref=ref,
     )
 
     version_dir = _safe_hub_path(root, "namespaces", namespace, entry["id"], entry["version"])
     index_path = _safe_hub_path(root, "index.json")
     index_sig_path = _safe_hub_path(root, "index.json.ed25519.sig")
-    ref = f"{namespace}/{entry['id']}@{entry['version']}"
+    stored_sig_name = artifact_path.name + ".ed25519.sig"
     with _publish_mutex(root):
         old_index = _read_bounded(index_path, MAX_FETCH_BYTES, "index.json") if index_path.is_file() else None
         old_index_sig = (
@@ -313,24 +332,9 @@ def publish(
             if version_dir.exists():
                 if version_dir.is_symlink() or not version_dir.is_dir():
                     raise VerificationError(f"{ref} exists but is not a regular version directory")
-                existing_artifact = version_dir / artifact_path.name
-                existing_signature = version_dir / sig_path.name
                 existing_entry_path = version_dir / "entry.json"
-                if not all(
-                    path.is_file() and not path.is_symlink()
-                    for path in (
-                        existing_artifact,
-                        existing_signature,
-                        existing_entry_path,
-                    )
-                ):
+                if not existing_entry_path.is_file() or existing_entry_path.is_symlink():
                     raise VerificationError(f"{ref} already exists in a corrupt or incomplete state")
-                existing_content = _read_bounded(existing_artifact, MAX_FETCH_BYTES, f"existing artifact for {ref}")
-                if hashlib.sha256(existing_content).hexdigest() != entry["content_sha256"]:
-                    raise VerificationError(
-                        f"{ref} already exists with different content; published versions are immutable, "
-                        "bump the version instead"
-                    )
                 try:
                     existing_entry = loads_strict(
                         _read_bounded(
@@ -341,6 +345,31 @@ def publish(
                     )
                 except (UnicodeDecodeError, ValueError, RecursionError) as exc:
                     raise VerificationError(f"existing entry.json for {ref} is unreadable: {exc}") from exc
+                # The existing entry decides which file IS the published
+                # artifact, so a differently-named artifact cannot repoint
+                # the version at new content.
+                existing_dist = existing_entry.get("distribution") if isinstance(existing_entry, dict) else None
+                if (
+                    not isinstance(existing_dist, dict)
+                    or existing_dist.get("artifact") != entry["distribution"]["artifact"]
+                    or existing_entry.get("content_sha256") != entry["content_sha256"]
+                ):
+                    raise VerificationError(
+                        f"{ref} already exists with different content or artifact file; published versions "
+                        "are immutable, bump the version instead"
+                    )
+                existing_artifact = version_dir / artifact_path.name
+                existing_signature = version_dir / stored_sig_name
+                if not all(
+                    path.is_file() and not path.is_symlink() for path in (existing_artifact, existing_signature)
+                ):
+                    raise VerificationError(f"{ref} already exists in a corrupt or incomplete state")
+                existing_content = _read_bounded(existing_artifact, MAX_FETCH_BYTES, f"existing artifact for {ref}")
+                if hashlib.sha256(existing_content).hexdigest() != entry["content_sha256"]:
+                    raise VerificationError(
+                        f"{ref} already exists with different content; published versions are immutable, "
+                        "bump the version instead"
+                    )
                 if existing_entry != entry:
                     raise VerificationError(f"{ref} already exists with different immutable metadata or provenance")
                 verify_artifact_bytes(
@@ -352,12 +381,13 @@ def publish(
                     ),
                     expected_sha256=entry["content_sha256"],
                     publisher_keys=ns_registry.publisher_keys(namespace),
+                    ref=ref,
                 )
             else:
                 version_dir.parent.mkdir(parents=True, exist_ok=True)
                 staging = Path(tempfile.mkdtemp(prefix=f".{entry['version']}.staging-", dir=version_dir.parent))
                 (staging / artifact_path.name).write_bytes(content)
-                (staging / sig_path.name).write_bytes(signature)
+                (staging / stored_sig_name).write_bytes(signature)
                 (staging / "entry.json").write_text(
                     json.dumps(entry, indent=2, sort_keys=True) + "\n", encoding="utf-8"
                 )

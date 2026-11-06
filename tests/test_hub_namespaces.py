@@ -94,7 +94,7 @@ def build_community_hub(hub_root: Path, root_key: Ed25519PrivateKey, community_k
     doc = founder_community_doc(root_key, community_key)
     write_namespace_registry(hub_root, doc, sign_registry_doc(doc, root_key))
     content = artifact_text(COMMUNITY_ID).encode("utf-8")
-    sig = make_sidecar(content, community_key, key_id=COMMUNITY_KEY_ID)
+    sig = make_sidecar(content, community_key, key_id=COMMUNITY_KEY_ID, ref=f"{COMMUNITY_REF}@1.0.0")
     entry = build_entry_dict(COMMUNITY_ID, "1.0.0", content, key_id=COMMUNITY_KEY_ID, namespace=COMMUNITY_NS)
     write_version_dir(hub_root, COMMUNITY_ID, "1.0.0", content, sig, entry, namespace=COMMUNITY_NS)
     report = write_index(hub_root)
@@ -112,7 +112,7 @@ def build_verified_hub(hub_root: Path, root_key: Ed25519PrivateKey) -> tuple[byt
     run ``release_index`` for a signed one; the lint-only negative cases skip it.
     """
     content = artifact_text(VERIFIED_ID).encode("utf-8")
-    sig = make_sidecar(content, root_key)
+    sig = make_sidecar(content, root_key, ref=VERIFIED_FULL_REF)
     entry = build_entry_dict(VERIFIED_ID, "1.0.0", content)
     entry["trust_tier"] = "verified"
     entry["distribution"]["counter_signatures"] = {"ed25519": TEST_KEY_ID}
@@ -302,7 +302,9 @@ def _resign_community_artifact_with_root(hub: Path, root_key: Ed25519PrivateKey)
     so only the signer-vs-namespace check can reject it."""
     vdir = hub / "namespaces" / COMMUNITY_NS / COMMUNITY_ID / "1.0.0"
     content = (vdir / f"{COMMUNITY_ID}.md").read_bytes()
-    (vdir / f"{COMMUNITY_ID}.md.ed25519.sig").write_bytes(make_sidecar(content, root_key, key_id=TEST_KEY_ID))
+    (vdir / f"{COMMUNITY_ID}.md.ed25519.sig").write_bytes(
+        make_sidecar(content, root_key, key_id=TEST_KEY_ID, ref=f"{COMMUNITY_REF}@1.0.0")
+    )
 
 
 def test_cross_namespace_signing_is_refused_at_install(
@@ -365,15 +367,17 @@ def test_verified_tier_installs_with_a_root_countersignature(tmp_path, test_priv
 def test_verified_tier_rejects_a_countersig_copied_from_the_artifact_signature(
     tmp_path, test_private_key, pinned_test_key
 ):
-    """Domain separation: the artifact's own signature signs `content`, the
-    counter-signature signs COUNTERSIGN_CONTEXT+ref+NUL+content — a copy cannot pass."""
+    """Domain separation: the artifact's own (v2) signature signs
+    ARTIFACT_CONTEXT+ref+NUL+content, the counter-signature signs
+    COUNTERSIGN_CONTEXT+ref+NUL+content — a copy cannot pass, whether it is
+    refused by sidecar format or by the signature check itself."""
     hub = tmp_path / "hub"
     _content, vdir = build_verified_hub(hub, test_private_key)
     release_index(hub, test_private_key)
     own_sig = (vdir / f"{VERIFIED_ID}.md.ed25519.sig").read_bytes()
     (vdir / f"{VERIFIED_ID}.md.ed25519.countersig").write_bytes(own_sig)
 
-    with pytest.raises(VerificationError, match="verification FAILED"):
+    with pytest.raises(VerificationError, match="verification FAILED|unsupported signature sidecar version"):
         install(VERIFIED_REF, tmp_path / "artifacts", RegistryClient(str(hub)))
 
 
@@ -396,7 +400,9 @@ def test_verified_tier_without_a_countersig_is_a_lint_problem(tmp_path, test_pri
     content = artifact_text(VERIFIED_ID).encode("utf-8")
     entry = build_entry_dict(VERIFIED_ID, "1.0.0", content)
     entry["trust_tier"] = "verified"
-    write_version_dir(hub, VERIFIED_ID, "1.0.0", content, make_sidecar(content, test_private_key), entry)
+    write_version_dir(
+        hub, VERIFIED_ID, "1.0.0", content, make_sidecar(content, test_private_key, ref=VERIFIED_FULL_REF), entry
+    )
 
     # PR-time lint: the index is not signed yet, so the self-declared 'verified' tier
     # is the only problem this tree has.
@@ -421,7 +427,8 @@ def test_a_countersig_under_the_signed_tier_is_a_lint_problem(tmp_path, test_pri
     hub = tmp_path / "hub"
     content = artifact_text("signed_charter").encode("utf-8")
     entry = build_entry_dict("signed_charter", "1.0.0", content)  # trust_tier "signed"
-    vdir = write_version_dir(hub, "signed_charter", "1.0.0", content, make_sidecar(content, test_private_key), entry)
+    sig = make_sidecar(content, test_private_key, ref=f"{FOUNDER_NAMESPACE}/signed_charter@1.0.0")
+    vdir = write_version_dir(hub, "signed_charter", "1.0.0", content, sig, entry)
     (vdir / "signed_charter.md.ed25519.countersig").write_bytes(
         make_countersig(content, test_private_key, ref=f"{FOUNDER_NAMESPACE}/signed_charter@1.0.0")
     )

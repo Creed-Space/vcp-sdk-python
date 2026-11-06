@@ -32,6 +32,7 @@ from .registry import (
     MAX_FETCH_BYTES,
     NAMESPACE_RE,
     VERSION_RE,
+    check_index_freshness,
     validate_artifact_filename,
 )
 from .verify import (
@@ -144,6 +145,7 @@ def _lint_version_dir(
         _read_bounded(sig_path, MAX_SIGNATURE_SIDECAR_BYTES, f"signature sidecar {sig_path.name}"),
         expected_sha256=entry["content_sha256"],
         publisher_keys=ns_registry.publisher_keys(namespace),
+        ref=f"{namespace}/{artifact_id}@{version}",
     )
 
     # `verified` tier: only a domain-separated, ref-bound ROOT counter-signature
@@ -199,16 +201,22 @@ def lint_hub_tree(hub_root: str | Path, require_signed_index: bool = True) -> Li
             report.problems.append("index.json is missing")
         else:
             try:
+                index_bytes = _read_bounded(index_path, MAX_FETCH_BYTES, "index.json")
                 verify_detached(
-                    _read_bounded(index_path, MAX_FETCH_BYTES, "index.json"),
+                    index_bytes,
                     _read_bounded(sig_path, MAX_SIGNATURE_SIDECAR_BYTES, "index signature")
                     if sig_path.is_file()
                     else None,
                     context=INDEX_CONTEXT,
                     what="registry index",
                 )
+                # Clients refuse an undated or stale index (F45), so the release
+                # posture does too: hub CI fails before clients would.
+                check_index_freshness(loads_strict(index_bytes.decode("utf-8")), index_bytes)
             except HubError as exc:
                 report.problems.append(f"index.json: {exc}")
+            except ValueError as exc:
+                report.problems.append(f"index.json: not valid JSON ({exc})")
 
     if not ns_root.is_dir():
         report.problems.append(f"{root} has no namespaces/ directory")
@@ -299,8 +307,25 @@ def build_index(hub_root: str | Path) -> tuple[dict[str, Any], LintReport]:
         # ceremony. Clients keep a high-water mark and refuse lower sequences.
         "sequence": _existing_sequence(root),
         "artifacts": artifacts,
+        # Signed freshness stamps are likewise set ONLY by the release
+        # ceremony; a rebuild carries them over, never invents them, so
+        # `vcp build-index` reproduces the committed index byte for byte.
+        **_existing_freshness(root),
     }
     return index, report
+
+
+def _existing_freshness(root: Path) -> dict[str, str]:
+    index_path = root / "index.json"
+    if not index_path.is_file():
+        return {}
+    try:
+        existing = loads_strict(_read_bounded(index_path, MAX_FETCH_BYTES, "index.json").decode("utf-8"))
+    except (HubError, UnicodeDecodeError, ValueError, RecursionError):
+        return {}
+    if not isinstance(existing, dict):
+        return {}
+    return {k: existing[k] for k in ("issued_at", "expires_at") if isinstance(existing.get(k), str)}
 
 
 def _existing_sequence(root: Path) -> int:
