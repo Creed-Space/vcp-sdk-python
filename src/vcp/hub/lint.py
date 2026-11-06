@@ -32,6 +32,7 @@ from .registry import (
     MAX_FETCH_BYTES,
     NAMESPACE_RE,
     VERSION_RE,
+    check_index_freshness,
     validate_artifact_filename,
 )
 from .verify import (
@@ -200,16 +201,22 @@ def lint_hub_tree(hub_root: str | Path, require_signed_index: bool = True) -> Li
             report.problems.append("index.json is missing")
         else:
             try:
+                index_bytes = _read_bounded(index_path, MAX_FETCH_BYTES, "index.json")
                 verify_detached(
-                    _read_bounded(index_path, MAX_FETCH_BYTES, "index.json"),
+                    index_bytes,
                     _read_bounded(sig_path, MAX_SIGNATURE_SIDECAR_BYTES, "index signature")
                     if sig_path.is_file()
                     else None,
                     context=INDEX_CONTEXT,
                     what="registry index",
                 )
+                # Clients refuse an undated or stale index (F45), so the release
+                # posture does too: hub CI fails before clients would.
+                check_index_freshness(loads_strict(index_bytes.decode("utf-8")), index_bytes)
             except HubError as exc:
                 report.problems.append(f"index.json: {exc}")
+            except ValueError as exc:
+                report.problems.append(f"index.json: not valid JSON ({exc})")
 
     if not ns_root.is_dir():
         report.problems.append(f"{root} has no namespaces/ directory")

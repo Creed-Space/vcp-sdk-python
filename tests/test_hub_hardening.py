@@ -142,6 +142,28 @@ def test_unsigned_index_is_refused_by_install_and_by_strict_lint(make_hub, tmp_p
     assert lint_hub_tree(hub, require_signed_index=False).ok
 
 
+@pytest.mark.parametrize(
+    ("issued_at", "expected"),
+    [(None, "issued_at"), ("2020-01-01T00:00:00+00:00", "STALE")],
+    ids=["undated", "stale"],
+)
+def test_strict_lint_refuses_an_index_clients_would_refuse(make_hub, test_private_key, issued_at, expected):
+    """F45 follow-up: strict (release/CI) lint applies the client freshness check,
+    so hub CI fails on an undated or stale signed index before clients do."""
+    from conftest import sign_index
+
+    hub = make_hub()
+    index = json.loads((hub / "index.json").read_text(encoding="utf-8"))
+    index.pop("issued_at", None)
+    (hub / "index.json").write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    sign_index(hub, test_private_key, issued_at=issued_at)
+
+    strict = lint_hub_tree(hub)
+    assert not strict.ok
+    assert any("index.json" in p and expected in p for p in strict.problems), strict.problems
+    assert lint_hub_tree(make_hub(root=hub.parent / "fresh")).ok
+
+
 def test_index_tampered_after_signing_is_refused(make_hub, tmp_path):
     hub = make_hub()
     index_path = hub / "index.json"
